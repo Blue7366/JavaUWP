@@ -1,8 +1,15 @@
 # Build outputs
 /PackageContent/
 /MC_Java_*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+*.cer
 /MC.Xbox/*.obj
 /MC.Xbox/*.exe
+/output/
+/dist/
+/staging/
 /glfw_shim/*.obj
 /glfw_shim/*.lib
 /glfw_shim/*.exp
@@ -11,7 +18,6 @@
 
 # Local IDE / workspace state
 /.vs/
-/.local/
 *.suo
 *.user
 *.VC.db
@@ -61,7 +67,4 @@
 __pycache__/
 *.pyc
 
-# Local-only docs and notes
-/PLAN.md
-/fix_doc.md
-/run_fabric.ps1
+.local/

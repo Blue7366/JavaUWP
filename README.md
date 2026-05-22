@@ -26,8 +26,20 @@ It is still an experimental port, not a polished product.
   A small Fabric mod with targeted compatibility patches for sandboxed Xbox paths and related platform issues.
 - `build.ps1`
   End-to-end packaging script for the UWP app.
-- `patch_fabric.ps1`
+- `scripts/`
+  Setup, patching, cleanup, asset generation, shared configuration, and environment helper scripts.
+- `scripts/patch-fabric.ps1`
   Patch step for Fabric loader path behavior that is incompatible with the Xbox sandbox.
+
+## Documentation
+
+- [Building](docs/BUILDING.md) - setup requirements, local game/runtime files, patching, packaging, and troubleshooting.
+- [Patching notes](docs/PATCHING.md) - why the Fabric Loader patch, compatibility mod, and GLFW shim exist.
+- [Legal notes](docs/LEGAL.md) - repository license boundaries and third-party content rules.
+
+For a clean local workspace, run `.\scripts\clean.ps1` first to preview ignored generated files. It does not delete anything unless you pass `-Apply`.
+
+Downloaded game/runtime inputs live under `staging\cache`, temporary package assembly lives under `staging\package`, and signed app packages are written to `output`.
 
 ## How it works
 
@@ -48,7 +60,8 @@ That architecture exists because the normal desktop assumptions do not hold on X
 
 ## What this repo does not include
 
-This repository is intentionally source-focused. It does not aim to redistribute:
+This repository is intentionally source-focused, but it also vendors the Mesa
+UWP runtime needed to run the project locally. It does not aim to redistribute:
 
 - Minecraft game assets
 - Mojang libraries
@@ -80,10 +93,6 @@ That required solving problems across:
 - EGL/GL presentation without Win32 window handles
 - path canonicalization failures in the Xbox sandbox
 - Fabric and Minecraft assumptions about a normal desktop filesystem
-
-## Repository notes
-
-This is a public-facing repo now, so the README stays focused on the project itself. The detailed fix history, debugging notes, and local packaging workflow remain in the source tree for development, but they are not the primary documentation surface.
 
 ## License and ownership
 

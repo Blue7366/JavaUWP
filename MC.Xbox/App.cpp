@@ -39,6 +39,10 @@ static HRESULT g_windowInteropHr = E_NOTIMPL;
 static HRESULT g_getWindowHandleHr = E_NOTIMPL;
 static HWND g_windowHandle = NULL;
 static constexpr wchar_t kEGLNativeWindowTypeProperty[] = L"EGLNativeWindowTypeProperty";
+// Keep these in sync with scripts/config.ps1 when changing game versions.
+static constexpr wchar_t kMinecraftVersionW[] = L"1.21.11";
+static constexpr char kFabricLaunchVersion[] = "fabric-loader-0.19.2-1.21.11";
+static constexpr char kMinecraftAssetIndex[] = "29";
 
 typedef jint(JNICALL* JNI_CreateJavaVM_t)(JavaVM**, void**, void*);
 
@@ -377,10 +381,10 @@ static bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     const std::vector<std::string> appArgs = {
         "--username", "DevPlayer",
-        "--version", "fabric-loader-0.19.2-1.21.11",
+        "--version", kFabricLaunchVersion,
         "--gameDir", w2a(fwd(gameDir)),
         "--assetsDir", w2a(fwd(assetsDir)),
-        "--assetIndex", "29",
+        "--assetIndex", kMinecraftAssetIndex,
         "--uuid", "00000000-0000-0000-0000-000000000000",
         "--accessToken", "0",
         "--versionType", "release"
@@ -518,7 +522,8 @@ public:
         const std::wstring javaExe = exeDir + L"\\jre\\bin\\java.exe";
         const std::wstring assetsDir = exeDir + L"\\assets";
         const std::wstring nativesDir = exeDir + L"\\natives";
-        const std::wstring clientJar = gameDir + L"\\versions\\1.21.11\\1.21.11.jar";
+        const std::wstring minecraftVersion = kMinecraftVersionW;
+        const std::wstring clientJar = gameDir + L"\\versions\\" + minecraftVersion + L"\\" + minecraftVersion + L".jar";
         const std::wstring argsPath = exeDir + L"\\java_args.txt";
         const std::wstring javaLog = exeDir + L"\\java_output.log";
 

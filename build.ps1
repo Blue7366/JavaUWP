@@ -1,101 +1,50 @@
 # build.ps1 - Build and package MC Java UWP
+param(
+    [string]$MesaRuntimeDir = $env:MESA_UWP_DIR,
+    [switch]$KeepStaging
+)
+
 $ErrorActionPreference = "Stop"
 
-function Resolve-JavaHome {
-    if ($env:JAVA_HOME -and (Test-Path (Join-Path $env:JAVA_HOME "bin\javac.exe"))) {
-        return $env:JAVA_HOME
-    }
+. (Join-Path $PSScriptRoot "scripts\common.ps1")
 
-    $candidates = @()
-    if (Test-Path "C:\ms-jdk21") {
-        $candidates += Get-ChildItem "C:\ms-jdk21" -Directory -ErrorAction SilentlyContinue
-    }
-    $candidates += Get-ChildItem "C:\" -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like "graalvm-community-openjdk-*" -or $_.Name -like "jdk-21*" }
-
-    $match = $candidates |
-        Where-Object { Test-Path (Join-Path $_.FullName "bin\javac.exe") } |
-        Select-Object -First 1
-    if ($match) {
-        return $match.FullName
-    }
-
-    throw "No suitable Java installation found. Set JAVA_HOME to a JDK 21 install."
-}
-
-function Resolve-VSTools {
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path $vswhere)) {
-        throw "vswhere.exe not found. Install Visual Studio Build Tools or Visual Studio with C++ tools."
-    }
-
-    $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if (-not $installPath) {
-        throw "Visual Studio with C++ tools not found."
-    }
-
-    $msvcRoot = Get-ChildItem (Join-Path $installPath "VC\Tools\MSVC") -Directory |
-        Sort-Object Name -Descending |
-        Select-Object -First 1 -ExpandProperty FullName
-    if (-not $msvcRoot) {
-        throw "MSVC tools directory not found."
-    }
-
-    $clExe = Join-Path $msvcRoot "bin\Hostx64\x64\cl.exe"
-    if (-not (Test-Path $clExe)) {
-        throw "cl.exe not found at $clExe"
-    }
-
-    return @{
-        MsvcRoot = $msvcRoot
-        ClExe = $clExe
-    }
-}
-
-function Resolve-RetroArchDir {
-    if ($env:RETROARCH_UWP_DIR -and (Test-Path $env:RETROARCH_UWP_DIR)) {
-        return $env:RETROARCH_UWP_DIR
-    }
-
-    $searchRoots = @("X:\WindowsApps", "S:\Program Files\WindowsApps")
-    foreach ($root in $searchRoots) {
-        if (-not (Test-Path $root)) { continue }
-
-        $candidate = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
-            Where-Object { (Test-Path (Join-Path $_.FullName "libEGL.dll")) -and (Test-Path (Join-Path $_.FullName "opengl32.dll")) -and (Test-Path (Join-Path $_.FullName "libgallium_wgl.dll")) } |
-            Select-Object -First 1
-        if ($candidate) {
-            return $candidate.FullName
-        }
-    }
-
-    throw "RetroArch UWP directory not found. Set RETROARCH_UWP_DIR to the installed package directory containing libEGL.dll."
-}
-
-$root = $PSScriptRoot
-$pkg = Join-Path $root "PackageContent"
+$root = Resolve-RepoRoot
+$pkg = Get-ConfigPath "PackageContentDir"
+$buildDir = Get-ConfigPath "BuildDir"
+$outDir = Get-ConfigPath "OutputDir"
+$gameDir = Get-ConfigPath "GameDir"
+$assetsDir = Get-ConfigPath "AssetsDir"
+$nativesSourceDir = Get-ConfigPath "NativesDir"
+$certDir = Get-ConfigPath "CertificateDir"
+$mcBuildDir = Join-Path $buildDir "MC.Xbox"
+$glfwBuildDir = Join-Path $buildDir "glfw_shim"
+$mcExe = Join-Path $mcBuildDir "MC.Xbox.exe"
+$shimDll = Join-Path $glfwBuildDir "glfw.dll"
 $jreSrc = Resolve-JavaHome
+$pythonExe = Resolve-Python
 $tools = Resolve-VSTools
+$sdk = Resolve-WindowsSdk
+$sdkRoot = $sdk.Root
+$sdkVer = $sdk.Version
+
+New-Item -ItemType Directory -Force -Path $buildDir, $outDir, $certDir, $mcBuildDir, $glfwBuildDir | Out-Null
 
 Write-Host "=== Building MC.Xbox.exe ==="
 Push-Location (Join-Path $root "MC.Xbox")
 
-$sdkRoot = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots").KitsRoot10
-$sdkVer = Get-ChildItem (Join-Path $sdkRoot "Include") | Sort-Object Name | Select-Object -Last 1 -ExpandProperty Name
-
 $env:INCLUDE = "$($tools.MsvcRoot)\include;${sdkRoot}Include\$sdkVer\ucrt;${sdkRoot}Include\$sdkVer\shared;${sdkRoot}Include\$sdkVer\um;${sdkRoot}Include\$sdkVer\winrt;${sdkRoot}Include\$sdkVer\cppwinrt;$jreSrc\include;$jreSrc\include\win32"
 $env:LIB = "$($tools.MsvcRoot)\lib\x64;${sdkRoot}Lib\$sdkVer\ucrt\x64;${sdkRoot}Lib\$sdkVer\um\x64"
 
-& $tools.ClExe App.cpp /std:c++17 /EHsc /W3 /O2 /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 `
+& $tools.ClExe App.cpp /std:c++17 /EHsc /W3 /O2 /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /Fo"$mcBuildDir\" `
     /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
     /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MACHINE:X64 `
-    /OUT:MC.Xbox.exe kernel32.lib shell32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib
+    /OUT:"$mcExe" kernel32.lib shell32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib
 if ($LASTEXITCODE -ne 0) { throw "Compile failed" }
 Pop-Location
 Write-Host "MC.Xbox.exe built"
 
 Write-Host "=== Building GLFW CoreWindow shim ==="
-& (Join-Path $root "glfw_shim\build_glfw.ps1")
+& (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir
 
 Write-Host "=== Building Xbox compatibility mod ==="
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
@@ -108,18 +57,18 @@ New-Item -ItemType Directory -Force -Path (Join-Path $pkg "assets") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "game") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "game\log_configs") | Out-Null
 
-Copy-Item (Join-Path $root "MC.Xbox\MC.Xbox.exe") (Join-Path $pkg "MC.Xbox.exe")
+Copy-Item $mcExe (Join-Path $pkg "MC.Xbox.exe")
 Copy-Item (Join-Path $root "MC.Xbox\Package.appxmanifest") (Join-Path $pkg "AppxManifest.xml")
 
 Write-Host "Copying game files..."
-Copy-Item -Recurse (Join-Path $root "gameDir\libraries") (Join-Path $pkg "game\libraries")
-Copy-Item -Recurse (Join-Path $root "gameDir\versions") (Join-Path $pkg "game\versions")
-Copy-Item -Recurse (Join-Path $root "gameDir\mods") (Join-Path $pkg "game\mods")
-if (Test-Path (Join-Path $root "gameDir\.fabric")) {
-    Copy-Item -Recurse (Join-Path $root "gameDir\.fabric") (Join-Path $pkg "game\.fabric")
+Copy-Item -Recurse (Join-Path $gameDir "libraries") (Join-Path $pkg "game\libraries")
+Copy-Item -Recurse (Join-Path $gameDir "versions") (Join-Path $pkg "game\versions")
+Copy-Item -Recurse (Join-Path $gameDir "mods") (Join-Path $pkg "game\mods")
+if (Test-Path (Join-Path $gameDir ".fabric")) {
+    Copy-Item -Recurse (Join-Path $gameDir ".fabric") (Join-Path $pkg "game\.fabric")
 }
 
-$remapped = Join-Path $root "gameDir\.fabric\remappedJars"
+$remapped = Join-Path $gameDir ".fabric\remappedJars"
 if (Test-Path $remapped) {
     Write-Host "Copying .fabric remapped jars..."
     New-Item -ItemType Directory -Force (Join-Path $pkg "game\.fabric\remappedJars") | Out-Null
@@ -127,11 +76,12 @@ if (Test-Path $remapped) {
 }
 
 Write-Host "Copying natives..."
-Copy-Item (Join-Path $root "natives-1.21\*.dll") (Join-Path $pkg "natives\") 
+Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
 
 Write-Host "Extracting JNA native..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$jnaJar = Join-Path $root "gameDir\libraries\net\java\dev\jna\jna\5.17.0\jna-5.17.0.jar"
+$jnaVersion = $ProjectConfig.JnaVersion
+$jnaJar = Join-Path $gameDir "libraries\net\java\dev\jna\jna\$jnaVersion\jna-$jnaVersion.jar"
 if (Test-Path $jnaJar) {
     $zip = [System.IO.Compression.ZipFile]::OpenRead($jnaJar)
     try {
@@ -148,14 +98,14 @@ if (Test-Path $jnaJar) {
 }
 
 Write-Host "Injecting GLFW shim into LWJGL JAR..."
-$glfwJar  = Join-Path $pkg "game\libraries\org\lwjgl\lwjgl-glfw\3.3.3\lwjgl-glfw-3.3.3-natives-windows.jar"
-$shimDll  = Join-Path $root "glfw_shim\glfw.dll"
-$jarExe   = Join-Path $pkg "jre\bin\jar.exe"
+$lwjglGlfwVersion = $ProjectConfig.LwjglGlfwVersion
+$glfwJar  = Join-Path $pkg "game\libraries\org\lwjgl\lwjgl-glfw\$lwjglGlfwVersion\lwjgl-glfw-$lwjglGlfwVersion-natives-windows.jar"
+$jarExe   = Join-Path $jreSrc "bin\jar.exe"
 if (-not (Test-Path $jarExe)) { $jarExe = "jar" }
 
 if (Test-Path $glfwJar) {
     # Extract JAR into a fresh temp dir, replace glfw.dll, repack
-    $jarTmpDir = Join-Path $root "patch\glfw_jar_tmp"
+    $jarTmpDir = Join-Path $buildDir "glfw_jar_tmp"
     Remove-Item -Recurse -Force $jarTmpDir -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $jarTmpDir | Out-Null
     Push-Location $jarTmpDir
@@ -179,9 +129,10 @@ if (Test-Path $glfwJar) {
 Copy-Item $shimDll (Join-Path $pkg "natives\glfw.dll") -Force
 
 Write-Host "Copying Mesa runtime..."
-$retroArch = Resolve-RetroArchDir
-foreach ($dll in @("libEGL.dll","libGLESv2.dll","opengl32.dll","libgallium_wgl.dll","libglapi.dll","glu32.dll","dxil.dll","z-1.dll")) {
-    $source = Join-Path $retroArch $dll
+$mesaRuntime = Resolve-MesaRuntimeDir -MesaRuntimeDir $MesaRuntimeDir
+Write-Host "Mesa runtime source: $mesaRuntime"
+foreach ($dll in Get-MesaRuntimeDllNames) {
+    $source = Join-Path $mesaRuntime $dll
     if (Test-Path $source) {
         Copy-Item $source (Join-Path $pkg $dll) -Force
         Copy-Item $source (Join-Path $pkg "natives\$dll") -Force
@@ -190,7 +141,7 @@ foreach ($dll in @("libEGL.dll","libGLESv2.dll","opengl32.dll","libgallium_wgl.d
 }
 
 Write-Host "Copying assets..."
-Copy-Item -Recurse -Force (Join-Path $root "assets\*") (Join-Path $pkg "assets\")
+Copy-Item -Recurse -Force (Join-Path $assetsDir "*") (Join-Path $pkg "assets\")
 Copy-Item -Force (Join-Path $root "log_configs\client-uwp.xml") (Join-Path $pkg "game\log_configs\client-uwp.xml")
 
 Write-Host "Copying JRE..."
@@ -199,20 +150,33 @@ Copy-Item -Recurse $jreSrc (Join-Path $pkg "jre")
 Copy-Item (Join-Path $root "xbox_security.properties") (Join-Path $pkg "jre\conf\security\xbox.properties")
 
 Write-Host "Generating UWP tile assets..."
-& python (Join-Path $root "generate_assets.py") $pkg
+& $pythonExe (Join-Path $root "scripts\generate-assets.py") $pkg
+if ($LASTEXITCODE -ne 0) { throw "Asset generation failed" }
 
 Write-Host "=== Packaging ==="
-$cert = Join-Path $root "MC_DevMode.pfx"
-$appx = Join-Path $root "MC_Java_1.0.0.0.appx"
+$cert = Join-Path $certDir $ProjectConfig.CertificateFileName
+$appx = Join-Path $outDir $ProjectConfig.AppxFileName
+$certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { $ProjectConfig.DefaultCertificateSubject }
 
 if (-not (Test-Path $cert)) {
-    $certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { "CN=MinecraftJavaUWP Dev" }
     $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
         -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
         -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
     Export-PfxCertificate -Cert $c -FilePath $cert `
-        -Password (ConvertTo-SecureString "devmode" -AsPlainText -Force) | Out-Null
+        -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
     Write-Host "Generated cert"
+}
+
+$allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
+    Where-Object {
+        $_.HasPrivateKey -and
+        ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
+    }
+$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' } | Sort-Object NotBefore -Descending
+$otherSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -notlike '*BanditVault*' } | Sort-Object NotBefore -Descending
+$signingCertCandidates = @($banditVaultSigningCertCandidates) + @($otherSigningCertCandidates)
+if (-not $signingCertCandidates) {
+    throw "Signing certificate not found in the current user certificate store."
 }
 
 $makeappx = Get-ChildItem "${sdkRoot}bin\$sdkVer\x64\makeappx.exe","${sdkRoot}bin\10.0.26100.0\x64\makeappx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
@@ -225,7 +189,53 @@ $signtool = Get-ChildItem "${sdkRoot}bin\$sdkVer\x64\signtool.exe","${sdkRoot}bi
 if (-not $signtool) { $signtool = "signtool" }
 
 & $makeappx pack /d $pkg /p $appx /overwrite
-& $signtool sign /fd SHA256 /a /f $cert /p devmode $appx
+if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed" }
+
+function Invoke-AppxSign {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AppxPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CertificateThumbprint,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SigntoolPath
+    )
+
+    & $SigntoolPath sign /fd SHA256 /sha1 $CertificateThumbprint $AppxPath
+    return ($LASTEXITCODE -eq 0)
+}
+
+$signingSucceeded = $false
+foreach ($signingCert in $signingCertCandidates) {
+    if (Invoke-AppxSign -AppxPath $appx -CertificateThumbprint $signingCert.Thumbprint -SigntoolPath $signtool) {
+        $signingSucceeded = $true
+        Write-Host "Signed appx with $($signingCert.Subject)"
+        break
+    }
+}
+
+if (-not $signingSucceeded) {
+    Write-Warning "Appx signing failed with the existing store certificates; generating a fresh dev certificate and retrying once."
+    Remove-Item $cert -Force -ErrorAction SilentlyContinue
+
+    $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
+        -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
+        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
+    Export-PfxCertificate -Cert $c -FilePath $cert `
+        -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
+
+    if (-not (Invoke-AppxSign -AppxPath $appx -CertificateThumbprint $c.Thumbprint -SigntoolPath $signtool)) {
+        throw "Appx signing failed"
+    }
+}
+if (-not (Test-Path $appx)) { throw "Appx package was not created" }
+
+if (-not $KeepStaging) {
+    Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
+    Write-Host "Removed staging package directory"
+}
 
 Write-Host ""
 Write-Host "=== Done ==="
