@@ -7,6 +7,7 @@
 *.cer
 /MC.Xbox/*.obj
 /MC.Xbox/*.exe
+/MC.Xbox/runtime_config.h
 /output/
 /dist/
 /staging/

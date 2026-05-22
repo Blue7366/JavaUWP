@@ -16,6 +16,12 @@
 #include <share.h>
 #include <errno.h>
 
+// Generated at build time by build.ps1 from MC.Xbox/runtime_config.h.in.
+// Provides the MC version, fabric launch profile name, and asset index that
+// the host needs to drive the embedded JVM. The build directory is added to
+// the compiler INCLUDE path so this header resolves without a relative path.
+#include "runtime_config.h"
+
 // ICoreWindowInterop is forward-declared without a GUID, so IID_PPV_ARGS
 // cannot use it directly. Redeclare it with the correct uuid here.
 MIDL_INTERFACE("45D64A29-A63B-4948-AE11-979AC0A4C806")
@@ -39,10 +45,8 @@ static HRESULT g_windowInteropHr = E_NOTIMPL;
 static HRESULT g_getWindowHandleHr = E_NOTIMPL;
 static HWND g_windowHandle = NULL;
 static constexpr wchar_t kEGLNativeWindowTypeProperty[] = L"EGLNativeWindowTypeProperty";
-// Keep these in sync with scripts/config.ps1 when changing game versions.
-static constexpr wchar_t kMinecraftVersionW[] = L"1.21.11";
-static constexpr char kFabricLaunchVersion[] = "fabric-loader-0.19.2-1.21.11";
-static constexpr char kMinecraftAssetIndex[] = "29";
+// Version-bound constants (kMinecraftVersionW, kFabricLaunchVersion,
+// kMinecraftAssetIndex) come from the build-generated runtime_config.h.
 
 typedef jint(JNICALL* JNI_CreateJavaVM_t)(JavaVM**, void**, void*);
 

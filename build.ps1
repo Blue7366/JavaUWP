@@ -1,10 +1,20 @@
 # build.ps1 - Build and package MC Java UWP
 param(
     [string]$MesaRuntimeDir = $env:MESA_UWP_DIR,
+    [string]$McVersion,
+    [string]$FabricLoader,
+    [string]$AssetIndex,
     [switch]$KeepStaging
 )
 
 $ErrorActionPreference = "Stop"
+
+# Push command-line overrides into the environment before sourcing config.
+# scripts/config.ps1 honors these so every downstream script (compat mod,
+# patch-fabric, etc.) sees the same chosen version.
+if ($McVersion)    { $env:MC_VERSION = $McVersion }
+if ($FabricLoader) { $env:FABRIC_LOADER_VERSION = $FabricLoader }
+if ($AssetIndex)   { $env:MC_ASSET_INDEX = $AssetIndex }
 
 . (Join-Path $PSScriptRoot "scripts\common.ps1")
 
@@ -29,10 +39,25 @@ $sdkVer = $sdk.Version
 
 New-Item -ItemType Directory -Force -Path $buildDir, $outDir, $certDir, $mcBuildDir, $glfwBuildDir | Out-Null
 
+Write-Host "=== Generating runtime_config.h ==="
+# Token-substitute MC.Xbox/runtime_config.h.in into the build dir. App.cpp
+# picks it up via the INCLUDE path below. Regenerated every build so the
+# header always matches the currently selected MC version.
+$runtimeConfigTemplate = Join-Path $root "MC.Xbox\runtime_config.h.in"
+$runtimeConfigOutput   = Join-Path $mcBuildDir "runtime_config.h"
+if (-not (Test-Path $runtimeConfigTemplate)) { throw "runtime_config.h.in not found at $runtimeConfigTemplate" }
+$runtimeConfigContent = [System.IO.File]::ReadAllText($runtimeConfigTemplate)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_VERSION@@',           $ProjectConfig.MinecraftVersion)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@FABRIC_LOADER_VERSION@@', $ProjectConfig.FabricLoaderVersion)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_ASSET_INDEX@@',       $ProjectConfig.MinecraftAssetIndex)
+if ($runtimeConfigContent -match '@@[A-Z_]+@@') { throw "runtime_config.h still contains unsubstituted tokens after generation: $($Matches[0])" }
+[System.IO.File]::WriteAllText($runtimeConfigOutput, $runtimeConfigContent)
+Write-Host "runtime_config.h written for MC $($ProjectConfig.MinecraftVersion) / fabric-loader $($ProjectConfig.FabricLoaderVersion) / asset index $($ProjectConfig.MinecraftAssetIndex)"
+
 Write-Host "=== Building MC.Xbox.exe ==="
 Push-Location (Join-Path $root "MC.Xbox")
 
-$env:INCLUDE = "$($tools.MsvcRoot)\include;${sdkRoot}Include\$sdkVer\ucrt;${sdkRoot}Include\$sdkVer\shared;${sdkRoot}Include\$sdkVer\um;${sdkRoot}Include\$sdkVer\winrt;${sdkRoot}Include\$sdkVer\cppwinrt;$jreSrc\include;$jreSrc\include\win32"
+$env:INCLUDE = "$mcBuildDir;$($tools.MsvcRoot)\include;${sdkRoot}Include\$sdkVer\ucrt;${sdkRoot}Include\$sdkVer\shared;${sdkRoot}Include\$sdkVer\um;${sdkRoot}Include\$sdkVer\winrt;${sdkRoot}Include\$sdkVer\cppwinrt;$jreSrc\include;$jreSrc\include\win32"
 $env:LIB = "$($tools.MsvcRoot)\lib\x64;${sdkRoot}Lib\$sdkVer\ucrt\x64;${sdkRoot}Lib\$sdkVer\um\x64"
 
 & $tools.ClExe App.cpp /std:c++17 /EHsc /W3 /O2 /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /Fo"$mcBuildDir\" `

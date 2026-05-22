@@ -21,7 +21,20 @@ function Test-JavaHomeMinimumVersion {
         return $false
     }
 
-    $versionOutput = (& $javaExe -version 2>&1 | Select-Object -First 1).ToString()
+    # java -version writes to stderr, and $ErrorActionPreference = 'Stop' in
+    # the parent scope turns any captured ErrorRecord into a terminating throw.
+    # PowerShell 7's $PSNativeCommandUseErrorActionPreference doesn't exist on
+    # 5.1, so relax the error pref itself for just this native call.
+    $versionOutput = $null
+    try {
+        $prevPref = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $versionOutput = (& $javaExe -version 2>&1 | Select-Object -First 1).ToString()
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $prevPref
+    }
     if ($versionOutput -match '"(?<major>\d+)(\.|")') {
         return ([int]$Matches.major -ge $MajorVersion)
     }
