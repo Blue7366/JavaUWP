@@ -8,6 +8,7 @@
 #include <wrl/wrappers/corewrappers.h>
 #include <windows.applicationmodel.core.h>
 #include <windows.ui.core.h>
+#include <windows.system.h>
 #include <windows.foundation.h>
 #include <windows.foundation.collections.h>
 #include <windows.storage.h>
@@ -632,6 +633,9 @@ struct AuthUiState {
     int secondsRemaining = 0;
     bool isError = false;
     bool showDeviceCode = true;
+    bool showMainMenu = false;
+    int selectedMenuIndex = 0;
+    float animation = 0.0f;
     float progress = -1.0f;
     QrMatrix qr;
 };
@@ -826,6 +830,68 @@ public:
         };
 
         const std::wstring title = state.title.empty() ? L"Microsoft sign-in" : state.title;
+        if (state.showMainMenu) {
+            const float left = frame.left + 36.0f;
+            const float menuRight = frame.left + (frame.right - frame.left) * 0.34f;
+            const float previewLeft = menuRight + 34.0f;
+            const float previewRight = frame.right - 36.0f;
+            const float top = frame.top + 34.0f;
+            const float buttonH = 62.0f;
+            const float buttonGap = 24.0f;
+            const wchar_t* labels[] = { L"Play", L"Mods", L"Sign out" };
+
+            DrawText(title.c_str(), bodyFormat_.Get(), D2D1::RectF(left, top, menuRight, top + 42.0f), white.Get());
+
+            for (int i = 0; i < 3; ++i) {
+                const float y = top + 76.0f + i * (buttonH + buttonGap);
+                const D2D1_RECT_F button = D2D1::RectF(left, y, menuRight, y + buttonH);
+                if (i == state.selectedMenuIndex) {
+                    d2dContext_->FillRectangle(button, panel.Get());
+                    d2dContext_->DrawRectangle(button, accent.Get(), 4.0f);
+                } else {
+                    d2dContext_->DrawRectangle(button, white.Get(), 2.0f);
+                }
+                const D2D1_RECT_F textRect = D2D1::RectF(button.left + 18.0f, button.top + 12.0f, button.right - 12.0f, button.bottom - 8.0f);
+                DrawText(labels[i], bodyFormat_.Get(), textRect, i == state.selectedMenuIndex ? accent.Get() : white.Get());
+            }
+
+            if (!state.status.empty()) {
+                const D2D1_RECT_F statusRect = D2D1::RectF(left, frame.bottom - 88.0f, menuRight, frame.bottom - 28.0f);
+                DrawText(state.status.c_str(), smallFormat_.Get(), statusRect, state.isError ? danger.Get() : muted.Get());
+            }
+
+            const D2D1_RECT_F preview = D2D1::RectF(previewLeft, top, previewRight, frame.bottom - 34.0f);
+            d2dContext_->FillRectangle(preview, black.Get());
+            d2dContext_->DrawRectangle(preview, white.Get(), 2.0f);
+
+            ComPtr<ID2D1SolidColorBrush> sky;
+            ComPtr<ID2D1SolidColorBrush> ridge;
+            ComPtr<ID2D1SolidColorBrush> water;
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x2F6F9F), sky.GetAddressOf());
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x315D35), ridge.GetAddressOf());
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x1B425A), water.GetAddressOf());
+            const float inset = 8.0f;
+            const D2D1_RECT_F pano = D2D1::RectF(preview.left + inset, preview.top + inset, preview.right - inset, preview.bottom - inset);
+            d2dContext_->FillRectangle(pano, sky.Get());
+            const float phase = static_cast<float>(static_cast<int>(state.animation * 45.0f) % 96);
+            for (int i = -1; i < 8; ++i) {
+                const float x = pano.left + i * 96.0f - phase;
+                const float peak = pano.top + 96.0f + ((i % 2) ? 28.0f : 0.0f);
+                d2dContext_->FillRectangle(D2D1::RectF(x, peak, x + 132.0f, pano.bottom - 72.0f), ridge.Get());
+            }
+            d2dContext_->FillRectangle(D2D1::RectF(pano.left, pano.bottom - 86.0f, pano.right, pano.bottom), water.Get());
+
+            const D2D1_RECT_F previewText = D2D1::RectF(preview.left + 26.0f, preview.top + 34.0f, preview.right - 26.0f, preview.top + 154.0f);
+            DrawText(L"Minecraft\nanimated\nsplash screen", bodyFormat_.Get(), previewText, white.Get());
+            if (!state.detail.empty()) {
+                const D2D1_RECT_F detailRect = D2D1::RectF(preview.left + 26.0f, preview.bottom - 82.0f, preview.right - 26.0f, preview.bottom - 24.0f);
+                DrawText(state.detail.c_str(), smallFormat_.Get(), detailRect, muted.Get());
+            }
+
+            finishDraw();
+            return;
+        }
+
         if (!state.showDeviceCode) {
             const float left = frame.left + 54.0f;
             const float right = frame.right - 54.0f;
@@ -1051,6 +1117,106 @@ static void RenderPreparationProgress(
     state.secondsRemaining = 0;
     state.isError = false;
     RenderAuth(renderer, state);
+}
+
+enum class MainMenuAction {
+    Play,
+    SignOut
+};
+
+static bool IsVirtualKeyDown(ICoreWindow* window, ABI::Windows::System::VirtualKey key) {
+    if (!window) return false;
+    CoreVirtualKeyStates state = CoreVirtualKeyStates_None;
+    if (FAILED(window->GetKeyState(key, &state))) {
+        return false;
+    }
+    return (state & CoreVirtualKeyStates_Down) == CoreVirtualKeyStates_Down;
+}
+
+static bool AnyVirtualKeyDown(ICoreWindow* window, std::initializer_list<ABI::Windows::System::VirtualKey> keys) {
+    for (const auto key : keys) {
+        if (IsVirtualKeyDown(window, key)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authConfig) {
+    AuthScreenRenderer rendererInstance;
+    AuthScreenRenderer* renderer = nullptr;
+    if (rendererInstance.Initialize(window)) {
+        renderer = &rendererInstance;
+    } else {
+        WriteLog(L"Main menu renderer failed; falling through to Play");
+        return MainMenuAction::Play;
+    }
+
+    AuthUiState state;
+    state.title = L"Java Port";
+    state.showDeviceCode = false;
+    state.showMainMenu = true;
+    state.status = L"Signed in as " + a2w(authConfig.username.c_str());
+    state.detail = L"Mods placeholder - no mod manager is wired yet.";
+
+    int selected = 0;
+    bool upWasDown = false;
+    bool downWasDown = false;
+    bool selectWasDown = false;
+
+    WriteLog(L"Main menu opened");
+    while (true) {
+        state.selectedMenuIndex = selected;
+        state.animation = static_cast<float>((GetTickCount64() % 100000) / 1000.0);
+        RenderAuth(renderer, state);
+
+        const bool upDown = AnyVirtualKeyDown(window, {
+            ABI::Windows::System::VirtualKey_Up,
+            ABI::Windows::System::VirtualKey_GamepadDPadUp,
+            ABI::Windows::System::VirtualKey_GamepadLeftThumbstickUp
+        });
+        const bool downDown = AnyVirtualKeyDown(window, {
+            ABI::Windows::System::VirtualKey_Down,
+            ABI::Windows::System::VirtualKey_GamepadDPadDown,
+            ABI::Windows::System::VirtualKey_GamepadLeftThumbstickDown
+        });
+        const bool selectDown = AnyVirtualKeyDown(window, {
+            ABI::Windows::System::VirtualKey_Enter,
+            ABI::Windows::System::VirtualKey_Space,
+            ABI::Windows::System::VirtualKey_GamepadA
+        });
+
+        if (upDown && !upWasDown) {
+            selected = (selected + 2) % 3;
+            state.detail = L"";
+        }
+        if (downDown && !downWasDown) {
+            selected = (selected + 1) % 3;
+            state.detail = L"";
+        }
+        if (selectDown && !selectWasDown) {
+            if (selected == 0) {
+                WriteLog(L"Main menu: Play selected");
+                return MainMenuAction::Play;
+            }
+            if (selected == 1) {
+                WriteLog(L"Main menu: Mods placeholder selected");
+                state.detail = L"Mods are not implemented yet.";
+            } else {
+                WriteLog(L"Main menu: Sign out selected");
+                state.status = L"Signing out";
+                state.detail = L"Clearing saved Microsoft session";
+                RenderAuth(renderer, state);
+                SleepWithAuthUi(renderer, state, 350);
+                return MainMenuAction::SignOut;
+            }
+        }
+
+        upWasDown = upDown;
+        downWasDown = downDown;
+        selectWasDown = selectDown;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
 }
 
 static bool RequestDeviceCode(DeviceCodeResponse& out, std::string& error) {
@@ -1869,9 +2035,19 @@ public:
         }
 
         LaunchAuthConfig authConfig;
-        if (!ResolveLaunchAuthConfig(g_authWindow.Get(), authConfig)) {
-            WriteLog(L"Dynamic authentication failed");
-            return E_FAIL;
+        while (true) {
+            if (!ResolveLaunchAuthConfig(g_authWindow.Get(), authConfig)) {
+                WriteLog(L"Dynamic authentication failed");
+                return E_FAIL;
+            }
+
+            const MainMenuAction menuAction = ShowMainMenu(g_authWindow.Get(), authConfig);
+            if (menuAction == MainMenuAction::Play) {
+                break;
+            }
+
+            ClearRefreshToken();
+            WriteLog(L"Saved Microsoft refresh token cleared by sign out");
         }
 
         if (exeDir != packageDir) {
