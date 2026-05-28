@@ -2080,6 +2080,160 @@ static bool CheckAndLogJavaException(JNIEnv* env, const wchar_t* stage) {
     return true;
 }
 
+static std::wstring JStringToWide(JNIEnv* env, jstring value) {
+    if (!env || !value) return std::wstring();
+    const char* utf8 = env->GetStringUTFChars(value, nullptr);
+    if (!utf8) {
+        env->ExceptionClear();
+        return std::wstring();
+    }
+    std::wstring wide = a2w(utf8);
+    env->ReleaseStringUTFChars(value, utf8);
+    return wide;
+}
+
+static std::wstring JavaObjectToWideString(JNIEnv* env, jobject object) {
+    if (!env || !object) return std::wstring();
+    jclass objectClass = env->FindClass("java/lang/Object");
+    if (!objectClass) {
+        env->ExceptionClear();
+        return std::wstring();
+    }
+    jmethodID toString = env->GetMethodID(objectClass, "toString", "()Ljava/lang/String;");
+    env->DeleteLocalRef(objectClass);
+    if (!toString) {
+        env->ExceptionClear();
+        return std::wstring();
+    }
+    jstring stringValue = static_cast<jstring>(env->CallObjectMethod(object, toString));
+    if (!stringValue || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return std::wstring();
+    }
+    std::wstring wide = JStringToWide(env, stringValue);
+    env->DeleteLocalRef(stringValue);
+    return wide;
+}
+
+static void DumpJavaThreadStacks(JavaVM* vm, const wchar_t* reason) {
+    if (!vm) return;
+
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    jint envResult = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_8);
+    if (envResult == JNI_EDETACHED) {
+        if (vm->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr) != JNI_OK || !env) {
+            WriteLog(L"Java thread dump failed: AttachCurrentThread failed");
+            return;
+        }
+        attached = true;
+    } else if (envResult != JNI_OK || !env) {
+        WriteLogF(L"Java thread dump failed: GetEnv => %d", envResult);
+        return;
+    }
+
+    WriteLogF(L"Java thread dump begin: %s", reason ? reason : L"watchdog");
+
+    jclass threadClass = env->FindClass("java/lang/Thread");
+    jclass mapClass = env->FindClass("java/util/Map");
+    jclass setClass = env->FindClass("java/util/Set");
+    jclass iteratorClass = env->FindClass("java/util/Iterator");
+    jclass entryClass = env->FindClass("java/util/Map$Entry");
+    if (!threadClass || !mapClass || !setClass || !iteratorClass || !entryClass || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        WriteLog(L"Java thread dump failed: class lookup failed");
+        goto done;
+    }
+
+    {
+        jmethodID getAllStackTraces = env->GetStaticMethodID(threadClass, "getAllStackTraces", "()Ljava/util/Map;");
+        jmethodID getName = env->GetMethodID(threadClass, "getName", "()Ljava/lang/String;");
+        jmethodID getState = env->GetMethodID(threadClass, "getState", "()Ljava/lang/Thread$State;");
+        jmethodID entrySet = env->GetMethodID(mapClass, "entrySet", "()Ljava/util/Set;");
+        jmethodID iterator = env->GetMethodID(setClass, "iterator", "()Ljava/util/Iterator;");
+        jmethodID hasNext = env->GetMethodID(iteratorClass, "hasNext", "()Z");
+        jmethodID next = env->GetMethodID(iteratorClass, "next", "()Ljava/lang/Object;");
+        jmethodID getKey = env->GetMethodID(entryClass, "getKey", "()Ljava/lang/Object;");
+        jmethodID getValue = env->GetMethodID(entryClass, "getValue", "()Ljava/lang/Object;");
+        if (!getAllStackTraces || !getName || !getState || !entrySet || !iterator ||
+            !hasNext || !next || !getKey || !getValue || env->ExceptionCheck()) {
+            env->ExceptionClear();
+            WriteLog(L"Java thread dump failed: method lookup failed");
+            goto done;
+        }
+
+        jobject traces = env->CallStaticObjectMethod(threadClass, getAllStackTraces);
+        jobject entries = traces ? env->CallObjectMethod(traces, entrySet) : nullptr;
+        jobject iter = entries ? env->CallObjectMethod(entries, iterator) : nullptr;
+        if (!iter || env->ExceptionCheck()) {
+            env->ExceptionClear();
+            WriteLog(L"Java thread dump failed: iterator creation failed");
+            if (traces) env->DeleteLocalRef(traces);
+            if (entries) env->DeleteLocalRef(entries);
+            goto done;
+        }
+
+        int threadCount = 0;
+        while (threadCount < 64 && env->CallBooleanMethod(iter, hasNext) == JNI_TRUE && !env->ExceptionCheck()) {
+            jobject entry = env->CallObjectMethod(iter, next);
+            jobject thread = entry ? env->CallObjectMethod(entry, getKey) : nullptr;
+            jobjectArray frames = entry ? static_cast<jobjectArray>(env->CallObjectMethod(entry, getValue)) : nullptr;
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                WriteLog(L"Java thread dump stopped: entry read failed");
+                if (entry) env->DeleteLocalRef(entry);
+                break;
+            }
+
+            jstring nameString = thread ? static_cast<jstring>(env->CallObjectMethod(thread, getName)) : nullptr;
+            jobject stateObject = thread ? env->CallObjectMethod(thread, getState) : nullptr;
+            std::wstring name = JStringToWide(env, nameString);
+            std::wstring state = JavaObjectToWideString(env, stateObject);
+            const jsize frameCount = frames ? env->GetArrayLength(frames) : 0;
+
+            WriteLogF(L"  Thread \"%s\" state=%s frames=%d",
+                name.empty() ? L"?" : name.c_str(),
+                state.empty() ? L"?" : state.c_str(),
+                static_cast<int>(frameCount));
+
+            const jsize framesToLog = frameCount < 12 ? frameCount : 12;
+            for (jsize i = 0; i < framesToLog; ++i) {
+                jobject frame = env->GetObjectArrayElement(frames, i);
+                std::wstring frameText = JavaObjectToWideString(env, frame);
+                WriteLogF(L"    at %s", frameText.empty() ? L"?" : frameText.c_str());
+                if (frame) env->DeleteLocalRef(frame);
+            }
+
+            if (nameString) env->DeleteLocalRef(nameString);
+            if (stateObject) env->DeleteLocalRef(stateObject);
+            if (frames) env->DeleteLocalRef(frames);
+            if (thread) env->DeleteLocalRef(thread);
+            if (entry) env->DeleteLocalRef(entry);
+            ++threadCount;
+        }
+
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            WriteLog(L"Java thread dump ended after clearing an exception");
+        }
+        WriteLogF(L"Java thread dump end: %d threads", threadCount);
+
+        env->DeleteLocalRef(iter);
+        env->DeleteLocalRef(entries);
+        env->DeleteLocalRef(traces);
+    }
+
+done:
+    if (entryClass) env->DeleteLocalRef(entryClass);
+    if (iteratorClass) env->DeleteLocalRef(iteratorClass);
+    if (setClass) env->DeleteLocalRef(setClass);
+    if (mapClass) env->DeleteLocalRef(mapClass);
+    if (threadClass) env->DeleteLocalRef(threadClass);
+    if (attached) {
+        vm->DetachCurrentThread();
+    }
+}
+
 static bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const std::wstring& jreDir,
     const std::wstring& gameDir,
@@ -2241,13 +2395,16 @@ static bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     WriteLog(L"Invoking KnotClient.main via embedded JVM");
     std::atomic<bool> javaMainRunning{ true };
-    std::thread javaMainWatchdog([&javaMainRunning]() {
+    std::thread javaMainWatchdog([&javaMainRunning, vm]() {
         unsigned seconds = 0;
         while (javaMainRunning.load()) {
             std::this_thread::sleep_for(std::chrono::seconds(5));
             seconds += 5;
             if (javaMainRunning.load()) {
                 WriteLogF(L"KnotClient.main still running after %u seconds", seconds);
+                if (seconds == 15 || (seconds >= 30 && (seconds % 30) == 0)) {
+                    DumpJavaThreadStacks(vm, L"KnotClient.main watchdog");
+                }
             }
         }
     });

@@ -284,6 +284,7 @@ static EGLDisplay g_eglDisplay = EGL_NO_DISPLAY;
 static EGLSurface g_eglSurface = EGL_NO_SURFACE;
 static EGLContext g_eglContext = EGL_NO_CONTEXT;
 static EGLConfig  g_eglConfig = nullptr;
+static DWORD g_eglContextThreadId = 0;
 static HMODULE g_libEGL = NULL;
 static HMODULE g_opengl32 = NULL;
 static BOOL g_graphicsRuntimeUsesGles = FALSE;
@@ -1207,15 +1208,11 @@ static bool CreateEglContext() {
         return false;
     }
 
-    if (!p_eglMakeCurrent(g_eglDisplay, g_eglSurface, g_eglSurface, g_eglContext)) {
-        ReportEglError("eglMakeCurrent");
-        return false;
-    }
-
     const char* vendor = p_eglQueryString ? p_eglQueryString(g_eglDisplay, EGL_VENDOR) : nullptr;
     const char* version = p_eglQueryString ? p_eglQueryString(g_eglDisplay, EGL_VERSION) : nullptr;
-    ShimLog("EGL initialized %d.%d vendor=%s version=%s",
-        major, minor, vendor ? vendor : "?", version ? version : "?");
+    ShimLog("EGL initialized %d.%d vendor=%s version=%s context=%p unbound creatorTid=%lu",
+        major, minor, vendor ? vendor : "?", version ? version : "?",
+        g_eglContext, GetCurrentThreadId());
     return true;
 }
 
@@ -1267,6 +1264,7 @@ extern "C" __declspec(dllexport) void glfwTerminate(void) {
     if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
         p_eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     }
+    g_eglContextThreadId = 0;
     if (p_eglDestroyContext && g_eglDisplay != EGL_NO_DISPLAY && g_eglContext != EGL_NO_CONTEXT) {
         p_eglDestroyContext(g_eglDisplay, g_eglContext);
     }
@@ -1528,19 +1526,27 @@ extern "C" __declspec(dllexport) uint64_t glfwGetTimerFrequency(void) {
 }
 
 extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
-    ShimLog("MakeContextCurrent %p", (void*)w);
+    const DWORD tid = GetCurrentThreadId();
+    ShimLog("MakeContextCurrent %p tid=%lu previousTid=%lu", (void*)w, tid, g_eglContextThreadId);
     if (!w) {
         if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
             p_eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
+        if (g_eglContextThreadId == tid) {
+            g_eglContextThreadId = 0;
+        }
         return;
     }
     if (!CreateEglContext()) return;
+    if (g_eglContextThreadId != 0 && g_eglContextThreadId != tid) {
+        ShimLog("eglMakeCurrent moving context from tid=%lu to tid=%lu", g_eglContextThreadId, tid);
+    }
     if (!p_eglMakeCurrent(g_eglDisplay, g_eglSurface, g_eglSurface, g_eglContext)) {
         ReportEglError("eglMakeCurrent");
         return;
     }
-    ShimLog("eglMakeCurrent OK");
+    g_eglContextThreadId = tid;
+    ShimLog("eglMakeCurrent OK tid=%lu", tid);
 
     PFN_glGetString p_glGetString = nullptr;
     if (g_opengl32) {
@@ -1562,7 +1568,7 @@ extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
     }
 }
 extern "C" __declspec(dllexport) GLFWwindow* glfwGetCurrentContext(void) {
-    return (g_eglContext != EGL_NO_CONTEXT) ? (GLFWwindow*)&g_fake_window : NULL;
+    return (g_eglContext != EGL_NO_CONTEXT && g_eglContextThreadId == GetCurrentThreadId()) ? (GLFWwindow*)&g_fake_window : NULL;
 }
 extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
     if (g_swap_log_count < 12) {
