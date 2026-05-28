@@ -9,6 +9,7 @@ The app embeds a real JDK, starts Fabric inside the UWP process, and presents Mi
 The project is usable for active development:
 
 - Minecraft 1.21.11 with Fabric Loader 0.19.2 boots in Xbox Developer Mode.
+- Dynamic Auth works with multiplayer for a seamless experience.
 - Menus render through Mesa on the Xbox GPU.
 - Keyboard and basic text input work.
 - Single player reaches gameplay.
@@ -68,13 +69,14 @@ The Mesa UWP runtime DLLs needed by the build are tracked in `mesa-runtime/`.
 ## How it works
 
 1. `MC.Xbox.exe` starts as a UWP app.
-2. The app publishes the live `CoreWindow` through app properties.
-3. The app seeds `LocalState` with runtime files that need writable paths.
-4. The app loads `jvm.dll` and starts Java in the same process.
-5. Fabric launches Minecraft from the embedded JVM.
-6. LWJGL loads the custom `glfw.dll`.
-7. The GLFW shim creates an EGL surface for the UWP window.
-8. Mesa translates OpenGL calls to D3D12.
+2. The app loads a main menu with Dynamic Auth.
+3. The app publishes the live `CoreWindow` through app properties.
+4. The app seeds `LocalState` with runtime files that need writable paths.
+5. The app loads `jvm.dll` and starts Java in the same process.
+6. Fabric launches Minecraft from the embedded JVM.
+7. LWJGL loads the custom `glfw.dll`.
+8. The GLFW shim creates an EGL surface for the UWP window.
+9. Mesa translates OpenGL calls to D3D12.
 
 The main compatibility work is around Xbox sandbox paths, packaged app file access, native library loading, GLFW behavior, input, and Fabric remapping.
 
@@ -111,4 +113,4 @@ Then apply when the preview looks right:
 
 Original project code in this repository is available under the custom terms in [LICENSE](LICENSE). Use is allowed with credit. Redistribution requires prior written permission from veroxsity / BanditVault.
 
-Minecraft, Fabric, Mojang assets, Mesa, LWJGL, Java, and other third party components remain under their own licenses and terms.
+Minecraft, Fabric, Mojang assets, Mesa, LWJGL, Java, and other third-party components remain under their own licenses and terms.
