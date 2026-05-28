@@ -2304,8 +2304,10 @@ public:
                 break;
             }
 
-            ClearRefreshToken();
-            WriteLog(L"Saved Microsoft refresh token cleared by sign out");
+			else {
+                ClearRefreshToken();
+				WriteLog(L"Saved Microsoft refresh token cleared by sign out");
+            }
         }
 
         if (exeDir != packageDir && !IsLocalRuntimeSeedCurrent(packageDir, exeDir)) {
