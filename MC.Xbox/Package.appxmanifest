@@ -10,7 +10,7 @@
   <mp:PhoneIdentity PhoneProductId="a1b2c3d4-0000-0000-0000-000000000002" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>Java Port</DisplayName>
+    <DisplayName>Bandit Launcher</DisplayName>
     <PublisherDisplayName>BanditVault</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -27,7 +27,7 @@
   <Applications>
     <Application Id="App" Executable="MC.Xbox.exe" EntryPoint="MC.App">
       <uap:VisualElements
-        DisplayName="Java Port"
+        DisplayName="Bandit Launcher"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png"
         Description="Java game port"
