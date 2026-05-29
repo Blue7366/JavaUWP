@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include <stdlib.h>
 #include <roapi.h>
 #include <wrl.h>
 #include <wrl/wrappers/corewrappers.h>
@@ -285,6 +284,7 @@ static EGLDisplay g_eglDisplay = EGL_NO_DISPLAY;
 static EGLSurface g_eglSurface = EGL_NO_SURFACE;
 static EGLContext g_eglContext = EGL_NO_CONTEXT;
 static EGLConfig  g_eglConfig = nullptr;
+static DWORD g_eglContextThreadId = 0;
 static HMODULE g_libEGL = NULL;
 static HMODULE g_opengl32 = NULL;
 static BOOL g_graphicsRuntimeUsesGles = FALSE;
@@ -377,7 +377,6 @@ static GLFWvidmode g_vidmode = {1920,1080,8,8,8,60};
 // Logging
 // ---------------------------------------------------------------------------
 static wchar_t g_log_path[MAX_PATH];
-static char g_mobileGluesDirUtf8[MAX_PATH * 4];
 
 static void ShimLog(const char* fmt, ...) {
     if (!g_log_path[0]) return;
@@ -417,81 +416,6 @@ static void JoinPath(wchar_t* out, int cch, const wchar_t* dir, const wchar_t* n
         return;
     }
     swprintf_s(out, cch, L"%s\\%s", dir, name);
-}
-
-static bool WideToUtf8(const wchar_t* src, char* out, int outCch) {
-    if (!src || !*src || !out || outCch <= 0) return false;
-    const int written = WideCharToMultiByte(CP_UTF8, 0, src, -1, out, outCch, nullptr, nullptr);
-    if (written > 0) return true;
-    const int fallback = WideCharToMultiByte(CP_ACP, 0, src, -1, out, outCch, nullptr, nullptr);
-    return fallback > 0;
-}
-
-static bool PeImageContainsRva(HMODULE module, DWORD rva, DWORD bytes) {
-    if (!module) return false;
-
-    const BYTE* base = (const BYTE*)module;
-    const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
-
-    const IMAGE_NT_HEADERS* nt = (const IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
-
-    const DWORD imageSize = nt->OptionalHeader.SizeOfImage;
-    return rva < imageSize && bytes <= imageSize - rva;
-}
-
-static void SeedMobileGluesDirectorySlot(HMODULE module, const char* mgDir) {
-    if (!g_graphicsRuntimeUsesGles || !module || !mgDir || !*mgDir) return;
-
-    // The judge-supplied UWP DLL reads this path global before proc_init loads
-    // config paths. Verify nearby string RVAs before touching the writable slot.
-    const DWORD kConfigJsonRva = 0x2abef8;
-    const DWORD kGlslCacheRva = 0x2abf08;
-    const DWORD kMgDirectoryPathSlotRva = 0x3012b0;
-
-    if (!PeImageContainsRva(module, kConfigJsonRva, 12) ||
-        !PeImageContainsRva(module, kGlslCacheRva, 16) ||
-        !PeImageContainsRva(module, kMgDirectoryPathSlotRva, sizeof(char*))) {
-        ShimLog("MobileGlues path slot layout not recognized");
-        return;
-    }
-
-    BYTE* base = (BYTE*)module;
-    const char* configJson = (const char*)(base + kConfigJsonRva);
-    const char* glslCache = (const char*)(base + kGlslCacheRva);
-    if (strcmp(configJson, "/config.json") != 0 ||
-        strcmp(glslCache, "/glsl_cache.tmp") != 0) {
-        ShimLog("MobileGlues path slot signature mismatch");
-        return;
-    }
-
-    char** mgDirectoryPath = (char**)(base + kMgDirectoryPathSlotRva);
-    *mgDirectoryPath = (char*)mgDir;
-    ShimLog("MobileGlues mg_directory_path seeded: %s", mgDir);
-}
-
-static const char* PrepareMobileGluesRuntime(HMODULE module) {
-    wchar_t mgDir[MAX_PATH];
-    DWORD len = GetEnvironmentVariableW(L"MG_DIR_PATH", mgDir, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) {
-        wchar_t runtimeDir[MAX_PATH];
-        GetRuntimeDir(runtimeDir, MAX_PATH);
-        JoinPath(mgDir, MAX_PATH, runtimeDir, L"mobileglues");
-        SetEnvironmentVariableW(L"MG_DIR_PATH", mgDir);
-    }
-
-    CreateDirectoryW(mgDir, nullptr);
-
-    if (!WideToUtf8(mgDir, g_mobileGluesDirUtf8, (int)sizeof(g_mobileGluesDirUtf8))) {
-        ShimLog("Failed to convert MG_DIR_PATH to UTF-8: %S", mgDir);
-        return nullptr;
-    }
-
-    _putenv_s("MG_DIR_PATH", g_mobileGluesDirUtf8);
-    SeedMobileGluesDirectorySlot(module, g_mobileGluesDirUtf8);
-    ShimLog("Prepared MobileGlues runtime dir: %s", g_mobileGluesDirUtf8);
-    return g_mobileGluesDirUtf8;
 }
 
 static void GetGraphicsRuntimeName(wchar_t* out, int cch) {
@@ -1139,17 +1063,8 @@ static bool LoadMesaEGL() {
 
     PFN_proc_init procInit = (PFN_proc_init)GetProcAddress(g_opengl32, "proc_init");
     if (procInit) {
-        if (g_graphicsRuntimeUsesGles) {
-            PrepareMobileGluesRuntime(g_opengl32);
-        }
         ShimLog("Calling opengl32!proc_init");
-        DWORD procInitException = 0;
-        __try {
-            procInit();
-        } __except (procInitException = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
-            ShimLog("opengl32!proc_init crashed exception=0x%08X", procInitException);
-            return false;
-        }
+        procInit();
         ShimLog("opengl32!proc_init returned");
     } else if (g_graphicsRuntimeUsesGles) {
         ShimLog("opengl32!proc_init not exported");
@@ -1293,15 +1208,11 @@ static bool CreateEglContext() {
         return false;
     }
 
-    if (!p_eglMakeCurrent(g_eglDisplay, g_eglSurface, g_eglSurface, g_eglContext)) {
-        ReportEglError("eglMakeCurrent");
-        return false;
-    }
-
     const char* vendor = p_eglQueryString ? p_eglQueryString(g_eglDisplay, EGL_VENDOR) : nullptr;
     const char* version = p_eglQueryString ? p_eglQueryString(g_eglDisplay, EGL_VERSION) : nullptr;
-    ShimLog("EGL initialized %d.%d vendor=%s version=%s",
-        major, minor, vendor ? vendor : "?", version ? version : "?");
+    ShimLog("EGL initialized %d.%d vendor=%s version=%s context=%p unbound creatorTid=%lu",
+        major, minor, vendor ? vendor : "?", version ? version : "?",
+        g_eglContext, GetCurrentThreadId());
     return true;
 }
 
@@ -1353,6 +1264,7 @@ extern "C" __declspec(dllexport) void glfwTerminate(void) {
     if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
         p_eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     }
+    g_eglContextThreadId = 0;
     if (p_eglDestroyContext && g_eglDisplay != EGL_NO_DISPLAY && g_eglContext != EGL_NO_CONTEXT) {
         p_eglDestroyContext(g_eglDisplay, g_eglContext);
     }
@@ -1614,19 +1526,27 @@ extern "C" __declspec(dllexport) uint64_t glfwGetTimerFrequency(void) {
 }
 
 extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
-    ShimLog("MakeContextCurrent %p", (void*)w);
+    const DWORD tid = GetCurrentThreadId();
+    ShimLog("MakeContextCurrent %p tid=%lu previousTid=%lu", (void*)w, tid, g_eglContextThreadId);
     if (!w) {
         if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
             p_eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
+        if (g_eglContextThreadId == tid) {
+            g_eglContextThreadId = 0;
+        }
         return;
     }
     if (!CreateEglContext()) return;
+    if (g_eglContextThreadId != 0 && g_eglContextThreadId != tid) {
+        ShimLog("eglMakeCurrent moving context from tid=%lu to tid=%lu", g_eglContextThreadId, tid);
+    }
     if (!p_eglMakeCurrent(g_eglDisplay, g_eglSurface, g_eglSurface, g_eglContext)) {
         ReportEglError("eglMakeCurrent");
         return;
     }
-    ShimLog("eglMakeCurrent OK");
+    g_eglContextThreadId = tid;
+    ShimLog("eglMakeCurrent OK tid=%lu", tid);
 
     PFN_glGetString p_glGetString = nullptr;
     if (g_opengl32) {
@@ -1648,7 +1568,7 @@ extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
     }
 }
 extern "C" __declspec(dllexport) GLFWwindow* glfwGetCurrentContext(void) {
-    return (g_eglContext != EGL_NO_CONTEXT) ? (GLFWwindow*)&g_fake_window : NULL;
+    return (g_eglContext != EGL_NO_CONTEXT && g_eglContextThreadId == GetCurrentThreadId()) ? (GLFWwindow*)&g_fake_window : NULL;
 }
 extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
     if (g_swap_log_count < 12) {
