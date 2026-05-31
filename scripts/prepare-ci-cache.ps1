@@ -211,7 +211,63 @@ if (-not (Test-Path $remappedJar)) {
         -PassThru `
         -RedirectStandardOutput $remapStdoutLog `
         -RedirectStandardError $remapStderrLog
-    $fabricExitCode = $javaProcess.ExitCode
+
+    $fabricExitCode = $null
+    $remapReady = $false
+    $lastRemappedSize = -1
+    $stableChecks = 0
+    $deadline = (Get-Date).AddMinutes(10)
+    $nextStatus = (Get-Date).AddSeconds(15)
+
+    while (-not $javaProcess.HasExited) {
+        if (Test-Path $remappedJar) {
+            try {
+                $remappedFile = Get-Item -LiteralPath $remappedJar
+                if ($remappedFile.Length -gt 0 -and $remappedFile.Length -eq $lastRemappedSize) {
+                    $stableChecks++
+                } else {
+                    $stableChecks = 0
+                    $lastRemappedSize = $remappedFile.Length
+                }
+
+                if ($stableChecks -ge 2) {
+                    $remapReady = $true
+                    Write-Host "Fabric remapped client jar is ready -> $remappedJar"
+                    break
+                }
+            } catch {
+                $stableChecks = 0
+            }
+        }
+
+        if ((Get-Date) -ge $deadline) {
+            Write-Warning "Fabric remap launch timed out after 10 minutes."
+            break
+        }
+
+        if ((Get-Date) -ge $nextStatus) {
+            Write-Host "Waiting for Fabric to finish generating the remapped client jar..."
+            $nextStatus = (Get-Date).AddSeconds(15)
+        }
+
+        Start-Sleep -Seconds 2
+        $javaProcess.Refresh()
+    }
+
+    if ($javaProcess.HasExited) {
+        $fabricExitCode = $javaProcess.ExitCode
+    } else {
+        if ($remapReady) {
+            Write-Host "Stopping Fabric remap launcher process after jar generation."
+            $fabricExitCode = 0
+        } else {
+            Write-Warning "Stopping Fabric remap launcher process before jar generation completed."
+            $fabricExitCode = 1
+        }
+
+        Stop-Process -Id $javaProcess.Id -Force -ErrorAction SilentlyContinue
+        $javaProcess.WaitForExit(10000) | Out-Null
+    }
 
     $remapOutput = @()
     if (Test-Path $remapStdoutLog) {
