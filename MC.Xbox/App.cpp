@@ -985,6 +985,20 @@ static bool ReadDownloadManifest(const std::wstring& path, std::vector<DownloadM
     return true;
 }
 
+static void CollectManifestLibraryJars(const std::wstring& manifestPath, const std::wstring& runtimeRoot, std::vector<std::wstring>& jars) {
+    std::vector<DownloadManifestEntry> entries;
+    if (!ReadDownloadManifest(manifestPath, entries)) return;
+    for (const auto& e : entries) {
+        std::wstring rel = e.relativePath;
+        std::replace(rel.begin(), rel.end(), L'\\', L'/');
+        for (wchar_t& c : rel) c = static_cast<wchar_t>(towlower(c));
+        if (rel.rfind(L"game/libraries/", 0) != 0) continue;
+        if (rel.size() < 4 || rel.compare(rel.size() - 4, 4, L".jar") != 0) continue;
+        const std::wstring abs = JoinRuntimeRelativePath(runtimeRoot, e.relativePath);
+        if (!abs.empty()) jars.push_back(abs);
+    }
+}
+
 static bool DeleteDirectoryTree(const std::wstring& path) {
     if (path.empty() || path.size() < 4) return false;
 
@@ -1015,52 +1029,50 @@ static bool DeleteDirectoryTree(const std::wstring& path) {
     return RemoveDirectoryW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND;
 }
 
-static std::wstring DownloadMarkerPath(const std::wstring& runtimeRoot) {
-    return runtimeRoot + L"\\.download_manifest";
+static std::wstring DownloadMarkerPath(const std::wstring& runtimeRoot, const std::wstring& targetId) {
+    return runtimeRoot + L"\\markers\\" + targetId + L".marker";
 }
 
 static std::wstring BuildDownloadMarker(const std::wstring& manifestPath) {
     std::string sha1;
     Sha1File(manifestPath, &sha1);
-    return std::wstring(L"markerVersion=1\n") +
-        L"minecraft=" + std::wstring(kMinecraftVersionW) + L"\n" +
-        L"fabricLoader=" + a2w(kFabricLoaderVersion) + L"\n" +
-        L"assetIndex=" + a2w(kMinecraftAssetIndex) + L"\n" +
+    return std::wstring(L"markerVersion=2\n") +
         L"manifestSha1=" + a2w(sha1.c_str()) + L"\n";
 }
 
-static void CleanupDownloadedRuntimeFiles(const std::wstring& runtimeRoot, const wchar_t* reason) {
-    WriteLogF(L"Cleaning downloaded runtime files reason=%s", reason ? reason : L"unknown");
+static void CleanupDownloadedRuntimeFiles(const std::wstring& runtimeRoot, const std::wstring& targetId, const wchar_t* reason) {
+    WriteLogF(L"Cleaning downloaded runtime files target=%s reason=%s", targetId.c_str(), reason ? reason : L"unknown");
     DeleteDirectoryTree(runtimeRoot + L"\\assets");
     DeleteDirectoryTree(runtimeRoot + L"\\game\\libraries");
     DeleteDirectoryTree(runtimeRoot + L"\\game\\versions");
-    DeleteFileW(DownloadMarkerPath(runtimeRoot).c_str());
+    DeleteFileW(DownloadMarkerPath(runtimeRoot, targetId).c_str());
 }
 
 static bool EnsureDownloadMarkerMatches(
     const std::wstring& manifestPath,
     const std::wstring& runtimeRoot,
+    const std::wstring& targetId,
     bool forceRepair) {
     if (forceRepair) {
-        CleanupDownloadedRuntimeFiles(runtimeRoot, L"repair requested");
+        CleanupDownloadedRuntimeFiles(runtimeRoot, targetId, L"repair requested");
         return true;
     }
 
     const std::wstring expected = BuildDownloadMarker(manifestPath);
     std::wstring actual;
-    if (!ReadTextFile(DownloadMarkerPath(runtimeRoot), actual)) {
+    if (!ReadTextFile(DownloadMarkerPath(runtimeRoot, targetId), actual)) {
         return true;
     }
     if (actual == expected) {
         return true;
     }
 
-    CleanupDownloadedRuntimeFiles(runtimeRoot, L"manifest marker changed");
+    CleanupDownloadedRuntimeFiles(runtimeRoot, targetId, L"manifest marker changed");
     return true;
 }
 
-static void MarkDownloadManifestCurrent(const std::wstring& manifestPath, const std::wstring& runtimeRoot) {
-    if (WriteTextFile(DownloadMarkerPath(runtimeRoot), BuildDownloadMarker(manifestPath))) {
+static void MarkDownloadManifestCurrent(const std::wstring& manifestPath, const std::wstring& runtimeRoot, const std::wstring& targetId) {
+    if (WriteTextFile(DownloadMarkerPath(runtimeRoot, targetId), BuildDownloadMarker(manifestPath))) {
         WriteLog(L"Download manifest marker written");
     } else {
         WriteLogF(L"Failed to write download manifest marker err=%u", GetLastError());
@@ -1278,13 +1290,14 @@ static bool DownloadUrlToFile(
 static bool EnsureRuntimeDownloads(
     const std::wstring& manifestPath,
     const std::wstring& runtimeRoot,
+    const std::wstring& targetId,
     const DownloadProgressCallback& progress = DownloadProgressCallback(),
     const DownloadOptions& options = DownloadOptions()) {
     if (GetFileAttributesW(manifestPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
         WriteLogF(L"No download manifest found at %s", manifestPath.c_str());
         return false;
     }
-    if (!EnsureDownloadMarkerMatches(manifestPath, runtimeRoot, options.forceRepair)) {
+    if (!EnsureDownloadMarkerMatches(manifestPath, runtimeRoot, targetId, options.forceRepair)) {
         return false;
     }
 
@@ -1344,7 +1357,7 @@ static bool EnsureRuntimeDownloads(
 
     if (missing.empty()) {
         WriteLogF(L"Download pass complete verified=%zu downloaded=0", verified);
-        MarkDownloadManifestCurrent(manifestPath, runtimeRoot);
+        MarkDownloadManifestCurrent(manifestPath, runtimeRoot, targetId);
         if (progress) progress(L"Download complete", L"Launching Minecraft", 1.0f);
         return true;
     }
@@ -1532,7 +1545,7 @@ static bool EnsureRuntimeDownloads(
     }
 
     WriteLogF(L"Download pass complete verified=%zu downloaded=%zu", verified, downloaded);
-    MarkDownloadManifestCurrent(manifestPath, runtimeRoot);
+    MarkDownloadManifestCurrent(manifestPath, runtimeRoot, targetId);
     if (progress) progress(L"Download complete", L"Launching Minecraft", 1.0f);
     return true;
 }
@@ -1887,12 +1900,11 @@ static std::wstring CacheModIcon(const std::wstring& runtimeRoot, const std::wst
     return {};
 }
 
-static std::wstring BuildModrinthSearchUrl(const char* index, int limit, int offset, const std::wstring& query, const char* projectType) {
-    const std::string facets =
-        std::string("[[\"project_type:") + projectType +
-        "\"],[\"categories:fabric\"],[\"versions:" +
-        std::string(kMinecraftVersion) +
-        "\"],[\"client_side:required\",\"client_side:optional\"]]";
+static std::wstring BuildModrinthSearchUrl(const char* index, int limit, int offset, const std::wstring& query, const char* projectType, const std::string& gameVersion, const std::string& loaderId) {
+    std::string facets = std::string("[[\"project_type:") + projectType + "\"]";
+    if (!loaderId.empty()) facets += ",[\"categories:" + loaderId + "\"]";
+    facets += ",[\"versions:" + gameVersion + "\"]";
+    facets += ",[\"client_side:required\",\"client_side:optional\"]]";
     std::wstring url = L"https://api.modrinth.com/v2/search?limit=" +
         std::to_wstring(limit) +
         L"&offset=" + std::to_wstring(offset) +
@@ -2100,12 +2112,12 @@ static bool LoadInstalledMods(const std::wstring& runtimeRoot, const std::wstrin
 
 static const int kModPageSize = 50;
 
-static bool FetchModrinthMods(const std::wstring& runtimeRoot, const char* index, const std::wstring& query, int offset, int limit, std::vector<ModCard>& out, int& totalHits, std::wstring& error, const char* projectType) {
+static bool FetchModrinthMods(const std::wstring& runtimeRoot, const char* index, const std::wstring& query, int offset, int limit, std::vector<ModCard>& out, int& totalHits, std::wstring& error, const char* projectType, const std::string& gameVersion, const std::string& loaderId) {
     using namespace winrt::Windows::Data::Json;
     error.clear();
     const bool modpack = projectType && std::strcmp(projectType, "modpack") == 0;
 
-    const std::wstring url = BuildModrinthSearchUrl(index, limit, offset, query, projectType);
+    const std::wstring url = BuildModrinthSearchUrl(index, limit, offset, query, projectType, gameVersion, loaderId);
     WriteLogF(L"Modrinth search url=%s", url.c_str());
     const HttpResult response = HttpGetString(url.c_str());
     if (!response.success()) {
@@ -2137,7 +2149,9 @@ static bool FetchModrinthMods(const std::wstring& runtimeRoot, const char* index
             const std::wstring iconUrl = JsonStringOrEmpty(hit, L"icon_url");
             if (card.title.empty()) card.title = card.slug.empty() ? card.projectId : card.slug;
             if (card.description.empty()) {
-                card.description = (modpack ? L"Fabric modpack for Minecraft " : L"Fabric mod for Minecraft ") + a2w(kMinecraftVersion);
+                std::wstring loaderName = loaderId.empty() ? std::wstring(L"Vanilla") : a2w(loaderId.c_str());
+                if (!loaderName.empty()) loaderName[0] = static_cast<wchar_t>(towupper(loaderName[0]));
+                card.description = loaderName + (modpack ? L" modpack for Minecraft " : L" mod for Minecraft ") + a2w(gameVersion.c_str());
             }
             card.status = std::to_wstring(JsonIntOrZero(hit, L"downloads")) + L" downloads";
             if (!iconUrl.empty()) {
@@ -2291,7 +2305,9 @@ static bool InstallModrinthProjectRecursive(
     std::set<std::wstring>& visited,
     std::vector<std::wstring>& installed,
     const ModCard* topMeta,
-    std::wstring& error) {
+    std::wstring& error,
+    const std::string& gameVersion,
+    const std::string& loaderId) {
     using namespace winrt::Windows::Data::Json;
     if (projectIdOrSlug.empty()) {
         error = L"Missing Modrinth project id";
@@ -2303,12 +2319,12 @@ static bool InstallModrinthProjectRecursive(
     visited.insert(projectIdOrSlug);
 
     const std::string project = w2a(projectIdOrSlug);
-    const std::string loaders = FormUrlEncode("[\"fabric\"]");
-    const std::string versions = FormUrlEncode("[\"" + std::string(kMinecraftVersion) + "\"]");
+    const std::string versions = FormUrlEncode("[\"" + gameVersion + "\"]");
     const std::wstring url =
         L"https://api.modrinth.com/v2/project/" + a2w(FormUrlEncode(project).c_str()) +
-        L"/version?loaders=" + a2w(loaders.c_str()) +
-        L"&game_versions=" + a2w(versions.c_str()) +
+        L"/version?" +
+        (loaderId.empty() ? std::wstring() : (L"loaders=" + a2w(FormUrlEncode("[\"" + loaderId + "\"]").c_str()) + L"&")) +
+        L"game_versions=" + a2w(versions.c_str()) +
         L"&include_changelog=false";
 
     WriteLogF(L"Modrinth versions url=%s", url.c_str());
@@ -2322,7 +2338,7 @@ static bool InstallModrinthProjectRecursive(
     try {
         JsonArray versionsArray = JsonArray::Parse(winrt::to_hstring(response.body));
         if (versionsArray.Size() == 0) {
-            error = L"No Fabric " + a2w(kMinecraftVersion) + L" version was found";
+            error = L"No " + (loaderId.empty() ? std::wstring(L"compatible") : a2w(loaderId.c_str())) + L" " + a2w(gameVersion.c_str()) + L" version was found";
             return false;
         }
 
@@ -2352,7 +2368,7 @@ static bool InstallModrinthProjectRecursive(
                 if (JsonStringOrEmpty(dep, L"dependency_type") != L"required") continue;
                 const std::wstring depProject = JsonStringOrEmpty(dep, L"project_id");
                 if (!depProject.empty() &&
-                    !InstallModrinthProjectRecursive(depProject, runtimeRoot, userModsDir, visited, installed, nullptr, error)) {
+                    !InstallModrinthProjectRecursive(depProject, runtimeRoot, userModsDir, visited, installed, nullptr, error, gameVersion, loaderId)) {
                     return false;
                 }
             }
@@ -2423,10 +2439,12 @@ static bool InstallModrinthProject(
     const std::wstring& runtimeRoot,
     const std::wstring& userModsDir,
     std::vector<std::wstring>& installed,
-    std::wstring& error) {
+    std::wstring& error,
+    const std::string& gameVersion,
+    const std::string& loaderId) {
     std::set<std::wstring> visited;
     const std::wstring id = !card.projectId.empty() ? card.projectId : card.slug;
-    return InstallModrinthProjectRecursive(id, runtimeRoot, userModsDir, visited, installed, &card, error);
+    return InstallModrinthProjectRecursive(id, runtimeRoot, userModsDir, visited, installed, &card, error, gameVersion, loaderId);
 }
 
 static bool WriteAllBytes(const std::wstring& path, const void* data, size_t size) {
@@ -2437,15 +2455,15 @@ static bool WriteAllBytes(const std::wstring& path, const void* data, size_t siz
     return f.good();
 }
 
-static bool ResolveModpackMrpack(const std::wstring& idOrSlug, std::wstring& url, std::wstring& filename, std::string& sha1, unsigned long long& size, std::wstring& error) {
+static bool ResolveModpackMrpack(const std::wstring& idOrSlug, std::wstring& url, std::wstring& filename, std::string& sha1, unsigned long long& size, std::wstring& error, const std::string& gameVersion, const std::string& loaderId) {
     using namespace winrt::Windows::Data::Json;
     const std::string project = w2a(idOrSlug);
-    const std::string loaders = FormUrlEncode("[\"fabric\"]");
-    const std::string versions = FormUrlEncode("[\"" + std::string(kMinecraftVersion) + "\"]");
+    const std::string versions = FormUrlEncode("[\"" + gameVersion + "\"]");
     const std::wstring vurl =
         L"https://api.modrinth.com/v2/project/" + a2w(FormUrlEncode(project).c_str()) +
-        L"/version?loaders=" + a2w(loaders.c_str()) +
-        L"&game_versions=" + a2w(versions.c_str()) +
+        L"/version?" +
+        (loaderId.empty() ? std::wstring() : (L"loaders=" + a2w(FormUrlEncode("[\"" + loaderId + "\"]").c_str()) + L"&")) +
+        L"game_versions=" + a2w(versions.c_str()) +
         L"&include_changelog=false";
     const HttpResult response = HttpGetString(vurl.c_str());
     if (!response.success()) {
@@ -2455,7 +2473,7 @@ static bool ResolveModpackMrpack(const std::wstring& idOrSlug, std::wstring& url
     try {
         JsonArray arr = JsonArray::Parse(winrt::to_hstring(response.body));
         if (arr.Size() == 0) {
-            error = L"No Fabric " + a2w(kMinecraftVersion) + L" build of this pack";
+            error = L"No " + (loaderId.empty() ? std::wstring(L"compatible") : a2w(loaderId.c_str())) + L" " + a2w(gameVersion.c_str()) + L" build of this pack";
             return false;
         }
         JsonObject version = nullptr;
@@ -2490,7 +2508,7 @@ static std::wstring ModpackDestForRelative(const std::wstring& relRaw, const std
     return gameDir + L"\\" + rel;
 }
 
-static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot, const std::wstring& userModsDir, std::wstring& error) {
+static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot, const std::wstring& userModsDir, std::wstring& error, const std::string& gameVersion, const std::string& loaderId) {
     using namespace winrt::Windows::Data::Json;
     const std::wstring gameDir = runtimeRoot + L"\\game";
     const std::wstring idOrSlug = !card.projectId.empty() ? card.projectId : card.slug;
@@ -2499,7 +2517,7 @@ static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot,
     std::wstring mrUrl, mrName;
     std::string mrSha1;
     unsigned long long mrSize = 0;
-    if (!ResolveModpackMrpack(idOrSlug, mrUrl, mrName, mrSha1, mrSize, error)) return false;
+    if (!ResolveModpackMrpack(idOrSlug, mrUrl, mrName, mrSha1, mrSize, error, gameVersion, loaderId)) return false;
 
     const std::wstring cacheDir = runtimeRoot + L"\\.modpack-cache";
     EnsureDirectoryTree(cacheDir);
@@ -2874,6 +2892,16 @@ static std::wstring MakeTargetId(const std::wstring& minecraftVersion, const std
     return minecraftVersion + L"-" + loader + L"-" + (loaderVersion.empty() ? L"none" : loaderVersion);
 }
 
+static std::string ModrinthLoaderId(const std::wstring& loader) {
+    std::wstring l = loader;
+    for (auto& c : l) c = static_cast<wchar_t>(towlower(c));
+    if (l == L"neoforge") return "neoforge";
+    if (l == L"forge") return "forge";
+    if (l == L"quilt") return "quilt";
+    if (l == L"vanilla") return "";
+    return "fabric";
+}
+
 static LaunchTarget DefaultLaunchTarget() {
     LaunchTarget t;
     t.minecraftVersion = kDefaultMinecraftVersionW;
@@ -2914,12 +2942,6 @@ static std::wstring TargetProfileText(const LaunchTarget& target) {
         text += L" " + target.loaderVersion;
     }
     return text;
-}
-
-static bool IsLaunchTargetSupportedByCurrentCode(const LaunchTarget& target) {
-    const LaunchTarget def = DefaultLaunchTarget();
-    return target.targetId == def.targetId &&
-        _wcsicmp(target.loader.c_str(), L"fabric") == 0;
 }
 
 static LaunchTarget TargetFromProfile(const Profile& p) {
@@ -3002,6 +3024,82 @@ static LaunchTarget ResolveProfileTarget(const std::wstring& runtimeRoot, const 
         if (t.targetId == id) return t;
     }
     return TargetFromProfile(profile);
+}
+
+struct MinecraftVersionInfo {
+    std::wstring targetId;
+    std::wstring minecraftVersion;
+    std::wstring loader;
+    std::wstring loaderVersion;
+    std::wstring assetIndex;
+    std::wstring launchVersion;
+    std::wstring manifestPath;
+    std::wstring loaderJar;
+    std::wstring clientJar;
+    std::wstring bundledModsDir;
+    bool supported = false;
+};
+
+static void ReadManifestHeader(const std::wstring& manifestPath, std::wstring& assetIndex, std::wstring& launchVersion) {
+    std::ifstream f(manifestPath, std::ios::binary);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        if (line[0] != '#') break;
+        const size_t tab = line.find('\t');
+        if (tab == std::string::npos || tab < 2) continue;
+        const std::string key = line.substr(2, tab - 2);
+        const std::string val = line.substr(tab + 1);
+        if (key == "assetIndex") assetIndex = a2w(val.c_str());
+        else if (key == "launchVersion") launchVersion = a2w(val.c_str());
+    }
+}
+
+static MinecraftVersionInfo ResolveVersionInfo(const std::wstring& packageDir, const std::wstring& runtimeRoot, const LaunchTarget& target) {
+    MinecraftVersionInfo info;
+    info.targetId = target.targetId;
+    info.minecraftVersion = target.minecraftVersion;
+    info.loader = target.loader;
+    info.loaderVersion = target.loaderVersion;
+    info.clientJar = runtimeRoot + L"\\game\\versions\\" + target.minecraftVersion + L"\\" + target.minecraftVersion + L".jar";
+
+    const LaunchTarget def = DefaultLaunchTarget();
+    const bool isDefault = target.targetId == def.targetId;
+    const bool isFabric = _wcsicmp(target.loader.c_str(), L"fabric") == 0;
+    const std::wstring perVersion = packageDir + L"\\runtime\\manifests\\" + target.targetId + L".tsv";
+    const std::wstring legacy = packageDir + L"\\download_manifest.tsv";
+    const std::wstring packagedLoaderJar = packageDir + L"\\runtime\\libraries\\net\\fabricmc\\fabric-loader\\" +
+        target.loaderVersion + L"\\fabric-loader-" + target.loaderVersion + L".jar";
+
+    if (GetFileAttributesW(perVersion.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        info.manifestPath = perVersion;
+    } else if (isDefault && GetFileAttributesW(legacy.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        info.manifestPath = legacy;
+    }
+
+    if (!info.manifestPath.empty()) {
+        ReadManifestHeader(info.manifestPath, info.assetIndex, info.launchVersion);
+    }
+    if (info.assetIndex.empty() && isDefault) info.assetIndex = a2w(kMinecraftAssetIndex);
+    if (info.launchVersion.empty() && isDefault) info.launchVersion = a2w(kFabricLaunchVersion);
+
+    if (GetFileAttributesW(packagedLoaderJar.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        info.loaderJar = packagedLoaderJar;
+    }
+
+    const std::wstring perVersionMods = packageDir + L"\\runtime\\version-mods\\" + target.targetId;
+    if (GetFileAttributesW(perVersionMods.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        info.bundledModsDir = perVersionMods;
+    } else if (isDefault) {
+        info.bundledModsDir = packageDir + L"\\runtime\\bundled-mods";
+    }
+
+    info.supported = isFabric && !info.manifestPath.empty() &&
+        !info.assetIndex.empty() && !info.launchVersion.empty() &&
+        !info.loaderJar.empty() && !info.bundledModsDir.empty();
+    return info;
 }
 
 static Profile MakeBuiltinVanillaProfile() {
@@ -3274,7 +3372,7 @@ static std::wstring ProfileDisplayName(const std::wstring& runtimeRoot, const st
 static std::wstring ProfileDisplayTarget(const std::wstring& runtimeRoot, const std::wstring& id) {
     return TargetProfileText(ResolveProfileTarget(runtimeRoot, GetProfileById(runtimeRoot, id)));
 }
-static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot) {
+static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot, const LaunchTarget& target) {
     if (g_installRunning.load()) return;
     g_installRunning.store(true);
     g_installResultReady.store(false);
@@ -3283,12 +3381,16 @@ static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot
     SetInstallStatus(L"Starting " + card.title + L"...");
     ModCard copy = card;
     std::wstring rootCopy = runtimeRoot;
-    std::thread([copy, rootCopy]() {
+    LaunchTarget targetCopy = target;
+    std::thread([copy, rootCopy, targetCopy]() {
+        const std::string gameVersion = w2a(targetCopy.minecraftVersion);
+        const std::string loaderId = ModrinthLoaderId(targetCopy.loader);
         std::wstring err;
         bool ok;
         if (copy.isModpack) {
-            const std::wstring pid = CreateProfile(rootCopy, copy.title);
-            ok = InstallModpack(copy, rootCopy, ProfileModsDir(rootCopy, pid), err);
+            const std::wstring pid = CreateProfile(rootCopy, copy.title, targetCopy);
+            WriteLogF(L"Installing modpack '%s' target=%s into profile %s", copy.title.c_str(), targetCopy.targetId.c_str(), pid.c_str());
+            ok = InstallModpack(copy, rootCopy, ProfileModsDir(rootCopy, pid), err, gameVersion, loaderId);
             if (ok) {
                 SetActiveProfileId(rootCopy, pid);
                 SetInstallStatus(L"Installed profile " + copy.title);
@@ -3302,11 +3404,22 @@ static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot
                 ok = false;
                 SetInstallStatus(L"Vanilla is read-only. Pick or make a profile first.");
             } else {
-                std::vector<std::wstring> installed;
-                ok = InstallModrinthProject(copy, rootCopy, ProfileModsDir(rootCopy, active), installed, err);
-                SetInstallStatus(ok
-                    ? (installed.empty() ? L"Already installed" : L"Installed " + std::to_wstring(installed.size()) + L" file(s)")
-                    : (err.empty() ? L"Install failed" : err));
+                const LaunchTarget activeTarget = ResolveProfileTarget(rootCopy, GetProfileById(rootCopy, active));
+                if (activeTarget.minecraftVersion != targetCopy.minecraftVersion ||
+                    _wcsicmp(activeTarget.loader.c_str(), targetCopy.loader.c_str()) != 0) {
+                    ok = false;
+                    WriteLogF(L"Install blocked: browse target %s != active profile target %s",
+                        targetCopy.targetId.c_str(), activeTarget.targetId.c_str());
+                    SetInstallStatus(L"Active profile is " + TargetProfileText(activeTarget) +
+                        L". Select or create a " + TargetShortText(targetCopy) + L" profile to install these.");
+                } else {
+                    std::vector<std::wstring> installed;
+                    WriteLogF(L"Installing mod '%s' target=%s into profile %s", copy.title.c_str(), targetCopy.targetId.c_str(), active.c_str());
+                    ok = InstallModrinthProject(copy, rootCopy, ProfileModsDir(rootCopy, active), installed, err, gameVersion, loaderId);
+                    SetInstallStatus(ok
+                        ? (installed.empty() ? L"Already installed" : L"Installed " + std::to_wstring(installed.size()) + L" file(s)")
+                        : (err.empty() ? L"Install failed" : err));
+                }
             }
         }
         g_installResultOk.store(ok);
@@ -4799,9 +4912,12 @@ static void LoadModsTab(AuthUiState& state, const std::wstring& runtimeRoot, con
     const char* index = !query.empty()
         ? "relevance"
         : ((state.selectedModsTab == 1 || state.selectedModsTab == 4) ? "downloads" : "newest");
+    const LaunchTarget modsTarget = CurrentModsTarget(state);
+    const std::string gameVersion = w2a(modsTarget.minecraftVersion);
+    const std::string loaderId = ModrinthLoaderId(modsTarget.loader);
     std::wstring error;
     int total = 0;
-    if (!FetchModrinthMods(runtimeRoot, index, query, 0, kModPageSize, state.modsCards, total, error, projectType)) {
+    if (!FetchModrinthMods(runtimeRoot, index, query, 0, kModPageSize, state.modsCards, total, error, projectType, gameVersion, loaderId)) {
         state.status = error.empty() ? L"Could not load Modrinth" : error;
         state.isError = true;
         return;
@@ -5150,9 +5266,12 @@ static void ShowModsPage(
         state.status = L"Loading more...";
         RenderAuth(renderer, state);
 
+        const LaunchTarget moreTarget = CurrentModsTarget(state);
+        const std::string moreGameVersion = w2a(moreTarget.minecraftVersion);
+        const std::string moreLoaderId = ModrinthLoaderId(moreTarget.loader);
         int total = state.modsTotalHits;
         std::wstring error;
-        if (!FetchModrinthMods(runtimeRoot, index, state.modsSearchQuery, before, kModPageSize, state.modsCards, total, error, projectType)) {
+        if (!FetchModrinthMods(runtimeRoot, index, state.modsSearchQuery, before, kModPageSize, state.modsCards, total, error, projectType, moreGameVersion, moreLoaderId)) {
             state.modsExhausted = true;
             return;
         }
@@ -5392,7 +5511,7 @@ static void ShowModsPage(
                 state.modsDetailOpen = false;
                 state.status.clear();
             } else if ((selectDown && !selectWasDown) || (enterDown && !enterWasDown)) {
-                StartInstallJob(state.modsDetailCard, runtimeRoot);
+                StartInstallJob(state.modsDetailCard, runtimeRoot, CurrentModsTarget(state));
             } else if (upDown && !upWasDown) {
                 state.modsDetailScroll = (std::max)(0, state.modsDetailScroll - 2);
             } else if (downDown && !downWasDown) {
@@ -6450,6 +6569,8 @@ static bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const std::wstring& javaLog,
     const std::wstring& argsPath,
     const std::wstring& classPath,
+    const std::wstring& launchVersion,
+    const std::wstring& assetIndex,
     const LaunchAuthConfig& authConfig)
 {
     const std::wstring jnaTmpDir = nativesDir;
@@ -6567,10 +6688,10 @@ static bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     const std::vector<std::string> appArgs = {
         "--username", authConfig.username,
-        "--version", kFabricLaunchVersion,
+        "--version", w2a(launchVersion),
         "--gameDir", w2a(fwd(gameDir)),
         "--assetsDir", w2a(fwd(assetsDir)),
-        "--assetIndex", kMinecraftAssetIndex,
+        "--assetIndex", w2a(assetIndex),
         "--uuid", authConfig.uuid,
         "--accessToken", authConfig.accessToken,
         "--versionType", "release"
@@ -6854,10 +6975,15 @@ public:
             selectedTarget.minecraftVersion.c_str(),
             selectedTarget.loader.c_str(),
             selectedTarget.loaderVersion.c_str());
-        if (!IsLaunchTargetSupportedByCurrentCode(selectedTarget)) {
-            WriteLogF(L"Unsupported launch target: %s. Current launch provider supports only %s",
+        const MinecraftVersionInfo selectedInfo = ResolveVersionInfo(packageDir, exeDir, selectedTarget);
+        if (!selectedInfo.supported) {
+            WriteLogF(L"Unsupported launch target: %s manifest=%s assetIndex=%s launchVersion=%s loaderJar=%s bundledMods=%s",
                 selectedTarget.targetId.c_str(),
-                DefaultLaunchTarget().targetId.c_str());
+                selectedInfo.manifestPath.empty() ? L"(none)" : selectedInfo.manifestPath.c_str(),
+                selectedInfo.assetIndex.empty() ? L"(none)" : selectedInfo.assetIndex.c_str(),
+                selectedInfo.launchVersion.empty() ? L"(none)" : selectedInfo.launchVersion.c_str(),
+                selectedInfo.loaderJar.empty() ? L"(none)" : selectedInfo.loaderJar.c_str(),
+                selectedInfo.bundledModsDir.empty() ? L"(none)" : selectedInfo.bundledModsDir.c_str());
             AuthScreenRenderer unsupportedRendererInstance;
             AuthScreenRenderer* unsupportedRenderer = nullptr;
             if (unsupportedRendererInstance.Initialize(g_authWindow.Get())) {
@@ -6899,6 +7025,18 @@ public:
             WriteLog(L"LocalState runtime seed is current; skipping copy");
         }
 
+        EnsureProfilesInitialized(exeDir);
+        const LaunchTarget launchTarget = ResolveProfileTarget(exeDir, GetProfileById(exeDir, GetActiveProfileId(exeDir)));
+        const MinecraftVersionInfo versionInfo = ResolveVersionInfo(packageDir, exeDir, launchTarget);
+        WriteLogF(L"Launch target=%s manifest=%s assetIndex=%s launchVersion=%s loaderJar=%s bundledMods=%s supported=%d",
+            versionInfo.targetId.c_str(),
+            versionInfo.manifestPath.empty() ? L"(none)" : versionInfo.manifestPath.c_str(),
+            versionInfo.assetIndex.empty() ? L"(none)" : versionInfo.assetIndex.c_str(),
+            versionInfo.launchVersion.empty() ? L"(none)" : versionInfo.launchVersion.c_str(),
+            versionInfo.loaderJar.empty() ? L"(none)" : versionInfo.loaderJar.c_str(),
+            versionInfo.bundledModsDir.empty() ? L"(none)" : versionInfo.bundledModsDir.c_str(),
+            versionInfo.supported ? 1 : 0);
+
         {
             AuthScreenRenderer downloadRendererInstance;
             AuthScreenRenderer* downloadRenderer = nullptr;
@@ -6907,7 +7045,9 @@ public:
             }
 
             AuthUiState downloadState;
-            const std::wstring manifestPath = packageDir + L"\\download_manifest.tsv";
+            const std::wstring manifestPath = versionInfo.manifestPath.empty()
+                ? (packageDir + L"\\download_manifest.tsv")
+                : versionInfo.manifestPath;
             RenderPreparationProgress(
                 downloadRenderer,
                 downloadState,
@@ -6925,6 +7065,7 @@ public:
                 if (EnsureRuntimeDownloads(
                     manifestPath,
                     exeDir,
+                    versionInfo.targetId,
                     [&](const wchar_t* status, const wchar_t* detail, float progress) {
                         RenderPreparationProgress(downloadRenderer, downloadState, status, detail, progress);
                     },
@@ -6967,10 +7108,10 @@ public:
             GetFileAttributesW((packageNativesDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES
                 ? packageNativesDir
                 : localNativesDir;
-        const std::wstring minecraftVersion = kMinecraftVersionW;
+        const std::wstring minecraftVersion = versionInfo.minecraftVersion;
         const std::wstring packageRuntimeDir = packageDir + L"\\runtime";
         const std::wstring packagedLibrariesDir = packageRuntimeDir + L"\\libraries";
-        const std::wstring bundledModsDir = gameDir + L"\\mods";
+        const std::wstring bundledModsDir = versionInfo.bundledModsDir;
         EnsureProfilesInitialized(exeDir);
         const std::wstring activeProfile = GetActiveProfileId(exeDir);
         const std::wstring userModsDir = ProfileModsDir(exeDir, activeProfile);
@@ -6996,9 +7137,16 @@ public:
         WriteLogF(L"gameDir   exists=%d", GetFileAttributesW(gameDir.c_str()) != INVALID_FILE_ATTRIBUTES);
         WriteLogF(L"clientJar exists=%d", GetFileAttributesW(clientJar.c_str()) != INVALID_FILE_ATTRIBUTES);
 
+        const std::wstring effManifestPath = versionInfo.manifestPath.empty()
+            ? (packageDir + L"\\download_manifest.tsv")
+            : versionInfo.manifestPath;
         std::vector<std::wstring> jars;
-        CollectJars(packagedLibrariesDir, jars);
-        CollectJars(gameDir + L"\\libraries", jars);
+        if (!versionInfo.loaderJar.empty()) {
+            jars.push_back(versionInfo.loaderJar);
+        } else {
+            CollectJars(packagedLibrariesDir, jars);
+        }
+        CollectManifestLibraryJars(effManifestPath, exeDir, jars);
         jars.push_back(clientJar);
         WriteLogF(L"JAR count: %zu", jars.size());
 
@@ -7009,7 +7157,9 @@ public:
         }
         WriteLog(L"Launching embedded JVM");
         g_minecraftRunning.store(true);
-        if (!RunEmbeddedMinecraft(exeDir, packageDir, jreDir, gameDir, assetsDir, nativesDir, bundledModsDir, userModsDir, clientJar, javaLog, argsPath, cp, authConfig)) {
+        const std::wstring effLaunchVersion = versionInfo.launchVersion.empty() ? a2w(kFabricLaunchVersion) : versionInfo.launchVersion;
+        const std::wstring effAssetIndex = versionInfo.assetIndex.empty() ? a2w(kMinecraftAssetIndex) : versionInfo.assetIndex;
+        if (!RunEmbeddedMinecraft(exeDir, packageDir, jreDir, gameDir, assetsDir, nativesDir, bundledModsDir, userModsDir, clientJar, javaLog, argsPath, cp, effLaunchVersion, effAssetIndex, authConfig)) {
             g_minecraftRunning.store(false);
             WriteLog(L"Embedded JVM launch failed");
             return E_FAIL;

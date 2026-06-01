@@ -8,7 +8,9 @@ param(
     [string]$AppxVersion = $env:APPX_VERSION,
     [switch]$KeepStaging,
     [switch]$SkipStopAppProcesses,
-    [switch]$StopFileLockers
+    [switch]$StopFileLockers,
+    [switch]$SkipVersionManifests,
+    [switch]$SkipVersionCompat
 )
 
 $ErrorActionPreference = "Stop"
@@ -359,15 +361,44 @@ if (-not (Test-Path $versionCatalogSource)) {
 Copy-Item $versionCatalogSource (Join-Path $pkg "runtime\version_catalog.tsv") -Force
 Write-Host "Version catalog: $versionCatalogSource"
 
-$loaderVersion = $ProjectConfig.FabricLoaderVersion
-$loaderRelative = "net\fabricmc\fabric-loader\$loaderVersion\fabric-loader-$loaderVersion.jar"
-$loaderSrc = Join-Path $gameDir "libraries\$loaderRelative"
-$loaderDst = Join-Path $pkg "runtime\libraries\$loaderRelative"
-if (-not (Test-Path $loaderSrc)) {
-    throw "Patched Fabric loader missing at $loaderSrc"
+function Ensure-FabricLoaderJar {
+    param([Parameter(Mandatory = $true)][string]$LoaderVersion)
+
+    $loaderRelative = "net\fabricmc\fabric-loader\$LoaderVersion\fabric-loader-$LoaderVersion.jar"
+    $loaderSrc = Join-Path $gameDir "libraries\$loaderRelative"
+    if (-not (Test-Path $loaderSrc)) {
+        $loaderUrl = "https://maven.fabricmc.net/net/fabricmc/fabric-loader/$LoaderVersion/fabric-loader-$LoaderVersion.jar"
+        Write-Host "Downloading Fabric loader $LoaderVersion"
+        New-Item -ItemType Directory -Force -Path (Split-Path $loaderSrc -Parent) | Out-Null
+        Invoke-WebRequest -UseBasicParsing -Uri $loaderUrl -OutFile $loaderSrc -TimeoutSec 60
+    }
+
+    & (Join-Path $root "scripts\patch-fabric.ps1") -LoaderVersion $LoaderVersion
+    if ($LASTEXITCODE -ne 0) { throw "Fabric loader patch failed for $LoaderVersion" }
+
+    $loaderDst = Join-Path $pkg "runtime\libraries\$loaderRelative"
+    New-Item -ItemType Directory -Force -Path (Split-Path $loaderDst -Parent) | Out-Null
+    Copy-Item $loaderSrc $loaderDst -Force
+    Write-Host "Packaged patched Fabric loader $LoaderVersion"
 }
-New-Item -ItemType Directory -Force -Path (Split-Path $loaderDst -Parent) | Out-Null
-Copy-Item $loaderSrc $loaderDst -Force
+
+$fabricTargets = @(
+    Import-Csv -Path $versionCatalogSource -Delimiter "`t" |
+        Where-Object { $_.loader -eq "fabric" -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
+)
+$fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
+    Where-Object { $_ } |
+    Select-Object -Unique
+foreach ($loaderVersion in $fabricLoaderVersions) {
+    try {
+        Ensure-FabricLoaderJar -LoaderVersion $loaderVersion
+    } catch {
+        if ($loaderVersion -eq $ProjectConfig.FabricLoaderVersion) {
+            throw
+        }
+        Write-Warning "Skipping patched Fabric loader ${loaderVersion}: $($_.Exception.Message)"
+    }
+}
 # Bundled mods (compat mod, optionally diagnostics) live under runtime\bundled-mods.
 # App.cpp copies them into LocalState\game\mods on launch.
 Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force
@@ -437,6 +468,56 @@ Write-Host "Generating official download manifest..."
     -MinecraftVersion $ProjectConfig.MinecraftVersion `
     -FabricLoaderVersion $ProjectConfig.FabricLoaderVersion `
     -OutputPath (Join-Path $pkg "download_manifest.tsv")
+
+$manifestsDir = Join-Path $pkg "runtime\manifests"
+New-Item -ItemType Directory -Force -Path $manifestsDir | Out-Null
+$defaultTargetId = "$($ProjectConfig.MinecraftVersion)-fabric-$($ProjectConfig.FabricLoaderVersion)"
+Copy-Item -Force (Join-Path $pkg "download_manifest.tsv") (Join-Path $manifestsDir "$defaultTargetId.tsv")
+Write-Host "Default per-version manifest: $defaultTargetId.tsv"
+
+if (-not $SkipVersionManifests) {
+    foreach ($row in $fabricTargets) {
+        $lv = $row.loaderVersion
+        $targetId = "$($row.minecraftVersion)-fabric-$lv"
+        if ($targetId -eq $defaultTargetId) { continue }
+        $out = Join-Path $manifestsDir "$targetId.tsv"
+        Write-Host "Generating per-version manifest: $targetId (loader $lv)"
+        try {
+            & (Join-Path $root "scripts\new-download-manifest.ps1") `
+                -MinecraftVersion $row.minecraftVersion `
+                -FabricLoaderVersion $lv `
+                -OutputPath $out
+        } catch {
+            Write-Warning "Skipping ${targetId}: $($_.Exception.Message)"
+            if (Test-Path $out) { Remove-Item -Force $out }
+        }
+    }
+} else {
+    Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
+}
+
+if (-not $SkipVersionCompat) {
+    $versionModsRoot = Join-Path $pkg "runtime\version-mods"
+    New-Item -ItemType Directory -Force -Path $versionModsRoot | Out-Null
+    foreach ($row in $fabricTargets) {
+        $lv = $row.loaderVersion
+        $targetId = "$($row.minecraftVersion)-fabric-$lv"
+        if ($targetId -eq $defaultTargetId) { continue }
+        $outDir = Join-Path $versionModsRoot $targetId
+        Write-Host "Building per-version compat mod: $targetId"
+        try {
+            & (Join-Path $root "compat_mod\build_compat_mod.ps1") `
+                -MinecraftVersion $row.minecraftVersion `
+                -LoaderVersion $lv `
+                -OutputDir $outDir
+        } catch {
+            Write-Warning "Per-version compat mod skipped for ${targetId}: $($_.Exception.Message)"
+            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
+        }
+    }
+} else {
+    Write-Host "Skipping per-version compat mods (-SkipVersionCompat)"
+}
 
 Copy-Item -Force (Join-Path $root "log_configs\client-uwp.xml") (Join-Path $pkg "runtime\log_configs\client-uwp.xml")
 

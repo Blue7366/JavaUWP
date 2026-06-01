@@ -14,7 +14,7 @@ import net.fabricmc.loader.impl.util.log.Log;
 import net.fabricmc.loader.impl.util.log.LogCategory;
 
 public abstract class FabricLauncherBase implements FabricLauncher {
-    protected static final boolean IS_DEVELOPMENT = SystemProperties.isSet(SystemProperties.DEVELOPMENT);
+    protected static final boolean IS_DEVELOPMENT = Boolean.getBoolean(SystemProperties.DEVELOPMENT);
 
     private static boolean mixinReady;
     private static Map<String, Object> properties;

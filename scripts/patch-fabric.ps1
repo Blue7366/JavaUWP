@@ -1,3 +1,7 @@
+param(
+    [string]$LoaderVersion
+)
+
 # patch-fabric.ps1 - Patch fabric-loader to fix Xbox toRealPath() issue
 $ErrorActionPreference = "Stop"
 
@@ -7,10 +11,10 @@ $root   = Resolve-RepoRoot
 $java   = Resolve-JavaHome
 $gameDir = Get-ConfigPath "GameDir"
 $buildDir = Get-ConfigPath "BuildDir"
-$loaderVersion = $ProjectConfig.FabricLoaderVersion
+$loaderVersion = if ($LoaderVersion) { $LoaderVersion } else { $ProjectConfig.FabricLoaderVersion }
 $loader = Join-Path $gameDir "libraries\net\fabricmc\fabric-loader\$loaderVersion\fabric-loader-$loaderVersion.jar"
 $patch  = Join-Path $root "patch"
-$tmp    = Join-Path $buildDir "patch"
+$tmp    = Join-Path $buildDir "patch\$loaderVersion"
 $classesTmp = Join-Path $tmp "classes"
 $jarTmp = Join-Path $tmp "jar"
 $patchedLoader = Join-Path $tmp "fabric-loader-$loaderVersion-patched.jar"
@@ -19,22 +23,37 @@ Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $classesTmp | Out-Null
 New-Item -ItemType Directory -Force $jarTmp | Out-Null
 
+if (-not (Test-Path $loader)) {
+    throw "Fabric loader jar not found: $loader"
+}
+
 # Compile the patched classes against the original JAR.
 Write-Host "Compiling patched Fabric loader classes..."
-& (Join-Path $java "bin\javac.exe") -cp $loader -d $classesTmp @(
+$jarExe = Join-Path $java "bin\jar.exe"
+$patchSources = @(
     (Join-Path $patch "LoaderUtil.java"),
     (Join-Path $patch "FileSystemUtil.java"),
-    (Join-Path $patch "FileSystemReference.java"),
-    (Join-Path $patch "OutputConsumerPath.java"),
     (Join-Path $patch "FabricLauncherBase.java")
 )
+$hasTinyRemapperOutputConsumer = & $jarExe tf $loader |
+    Select-String -SimpleMatch "net/fabricmc/loader/impl/lib/tinyremapper/OutputConsumerPath.class" -Quiet
+if ($hasTinyRemapperOutputConsumer) {
+    $patchSources += @(
+        (Join-Path $patch "FileSystemReference.java"),
+        (Join-Path $patch "OutputConsumerPath.java")
+    )
+} else {
+    Write-Host "TinyRemapper OutputConsumerPath is not bundled in fabric-loader-$loaderVersion; skipping that patch."
+}
+
+& (Join-Path $java "bin\javac.exe") -cp $loader -d $classesTmp $patchSources
 if ($LASTEXITCODE -ne 0) { throw "Compile failed" }
 
 # Repack a fresh JAR instead of updating in place. Repeated ZipArchive updates
 # can leave headers that jar.exe tolerates but .NET refuses to open later.
 Write-Host "Extracting Fabric loader JAR..."
 Push-Location $jarTmp
-& (Join-Path $java "bin\jar.exe") xf $loader
+& $jarExe xf $loader
 if ($LASTEXITCODE -ne 0) { throw "JAR extract failed" }
 Pop-Location
 
@@ -68,9 +87,9 @@ if (Test-Path $manifest) {
 
 Write-Host "Repacking patched Fabric loader JAR..."
 if (Test-Path $manifestCopy) {
-    & (Join-Path $java "bin\jar.exe") cfm $patchedLoader $manifestCopy -C $jarTmp .
+    & $jarExe cfm $patchedLoader $manifestCopy -C $jarTmp .
 } else {
-    & (Join-Path $java "bin\jar.exe") cf $patchedLoader -C $jarTmp .
+    & $jarExe cf $patchedLoader -C $jarTmp .
 }
 if ($LASTEXITCODE -ne 0) { throw "JAR repack failed" }
 Move-Item -LiteralPath $patchedLoader -Destination $loader -Force

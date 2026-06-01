@@ -1,3 +1,9 @@
+param(
+    [string]$MinecraftVersion,
+    [string]$LoaderVersion,
+    [string]$OutputDir
+)
+
 $ErrorActionPreference = "Stop"
 
 . (Join-Path (Split-Path $PSScriptRoot -Parent) "scripts\common.ps1")
@@ -5,7 +11,9 @@ $ErrorActionPreference = "Stop"
 $root = Resolve-RepoRoot
 $srcJava = Join-Path $PSScriptRoot "src\main\java"
 $srcResources = Join-Path $PSScriptRoot "src\main\resources"
-$buildRoot = Join-Path (Get-ConfigPath "BuildDir") "compat_mod"
+if (-not $MinecraftVersion) { $MinecraftVersion = $ProjectConfig.MinecraftVersion }
+if (-not $LoaderVersion) { $LoaderVersion = $ProjectConfig.FabricLoaderVersion }
+$buildRoot = Join-Path (Get-ConfigPath "BuildDir") "compat_mod\$MinecraftVersion-$LoaderVersion"
 $classesDir = Join-Path $buildRoot "classes"
 $compatJarName = "$($ProjectConfig.CompatModId)-$($ProjectConfig.CompatModVersion).jar"
 $jarPath = Join-Path $buildRoot $compatJarName
@@ -16,10 +24,11 @@ $javaHome = Resolve-JavaHome
 $javac = Join-Path $javaHome "bin\javac.exe"
 $jar = Join-Path $javaHome "bin\jar.exe"
 $mixinVersion = $ProjectConfig.MixinVersion
-$minecraftVersion = $ProjectConfig.MinecraftVersion
-$loaderVersion = $ProjectConfig.FabricLoaderVersion
 $mixinJar = Join-Path $gameDir "libraries\net\fabricmc\sponge-mixin\$mixinVersion\sponge-mixin-$mixinVersion.jar"
-$clientJar = Join-Path $gameDir ".fabric\remappedJars\minecraft-$minecraftVersion-$loaderVersion\client-intermediary.jar"
+$clientJar = Join-Path $gameDir ".fabric\remappedJars\minecraft-$MinecraftVersion-$LoaderVersion\client-intermediary.jar"
+if (-not (Test-Path $clientJar)) {
+    throw "Remapped client jar not found for $MinecraftVersion-${LoaderVersion}: $clientJar. Run the Fabric client once for this version so the remapped jar is generated."
+}
 
 Remove-Item -Recurse -Force $buildRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $classesDir | Out-Null
@@ -33,6 +42,11 @@ $cp = @($clientJar, $mixinJar) -join ";"
 if ($LASTEXITCODE -ne 0) { throw "compatibility mod compile failed" }
 
 Copy-Item -Recurse "$srcResources\*" $classesDir -Force
+$fmj = Join-Path $classesDir "fabric.mod.json"
+(Get-Content $fmj -Raw).
+    Replace("__MINECRAFT_VERSION__", $MinecraftVersion).
+    Replace("__FABRIC_LOADER_VERSION__", $LoaderVersion) |
+    Set-Content $fmj -NoNewline
 
 Push-Location $classesDir
 & $jar cf $jarPath .
@@ -42,5 +56,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 Pop-Location
 
-Copy-Item $jarPath (Join-Path $modsDir $compatJarName) -Force
-Write-Host "Compatibility mod built -> $jarPath"
+if ($OutputDir) {
+    New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+    Copy-Item $jarPath (Join-Path $OutputDir $compatJarName) -Force
+} else {
+    Copy-Item $jarPath (Join-Path $modsDir $compatJarName) -Force
+}
+Write-Host "Compatibility mod built ($MinecraftVersion) -> $jarPath"

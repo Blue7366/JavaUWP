@@ -189,6 +189,8 @@ $lines = [System.Collections.Generic.List[string]]::new()
 $lines.Add("# MinecraftJavaUWP official download manifest")
 $lines.Add("# minecraftVersion`t$MinecraftVersion")
 $lines.Add("# fabricLoaderVersion`t$FabricLoaderVersion")
+$lines.Add("# assetIndex`t$($versionJson.assetIndex.id)")
+$lines.Add("# launchVersion`t$($fabricProfile.id)")
 $lines.Add("# path`tsha1`tsize`turl")
 foreach ($entry in $deduped) {
     $lines.Add("$($entry.Path)`t$($entry.Sha1)`t$($entry.Size)`t$($entry.Url)")
