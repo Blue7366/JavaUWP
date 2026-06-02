@@ -2963,6 +2963,7 @@ static bool ConfigureSodiumDefaults(const std::wstring& gameDir, const std::wstr
         // never initialized. Newer legacy targets have been stable without this.
         if (CompareVersionNumbers(w2a(minecraftVersion), "1.17") < 0) {
             mixinChanged |= UpsertPropertiesSettingWhenMissing(mixinConfigText, L"mixin.features.particle", L"false");
+            mixinChanged |= UpsertPropertiesSettingWhenMissing(mixinConfigText, L"mixin.features.entity.smooth_lighting", L"false");
         }
         if (mixinChanged) {
             if (WriteTextFile(mixinConfigPath, mixinConfigText)) {
