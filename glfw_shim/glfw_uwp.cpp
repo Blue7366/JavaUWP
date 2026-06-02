@@ -975,6 +975,10 @@ static int ScaleDimensionToPixels(FLOAT value, double scale, int fallback) {
     return scaled > 0.0 ? (int)(scaled + 0.5) : fallback;
 }
 
+static bool UseRawScaledFramebuffer() {
+    return EnvFlagEnabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
+}
+
 static void GetDisplayScale(double& scaleX, double& scaleY) {
     scaleX = 1.0;
     scaleY = 1.0;
@@ -1034,8 +1038,16 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
 
     const int newWindowWidth = bounds.Width > 0 ? (int)(bounds.Width + 0.5f) : g_window_width;
     const int newWindowHeight = bounds.Height > 0 ? (int)(bounds.Height + 0.5f) : g_window_height;
-    const int newFramebufferWidth = ScaleDimensionToPixels(bounds.Width, scaleX, g_framebuffer_width);
-    const int newFramebufferHeight = ScaleDimensionToPixels(bounds.Height, scaleY, g_framebuffer_height);
+    // Mesa's UWP CoreWindow surface is sized in view pixels. Reporting raw
+    // display pixels on 4K displays makes Minecraft set a viewport larger than
+    // the EGL surface, which clips rendering into the lower-left corner.
+    const bool rawScaledFramebuffer = UseRawScaledFramebuffer();
+    const int newFramebufferWidth = rawScaledFramebuffer
+        ? ScaleDimensionToPixels(bounds.Width, scaleX, g_framebuffer_width)
+        : newWindowWidth;
+    const int newFramebufferHeight = rawScaledFramebuffer
+        ? ScaleDimensionToPixels(bounds.Height, scaleY, g_framebuffer_height)
+        : newWindowHeight;
     const float newContentScaleX = (float)scaleX;
     const float newContentScaleY = (float)scaleY;
 
@@ -1058,10 +1070,11 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
     g_vidmode.height = g_framebuffer_height;
     g_fake_window.width = g_window_width;
     g_fake_window.height = g_window_height;
-    ShimLog("Window size %dx%d, framebuffer %dx%d, scale %.3fx%.3f",
+    ShimLog("Window size %dx%d, framebuffer %dx%d, scale %.3fx%.3f%s",
         g_window_width, g_window_height,
         g_framebuffer_width, g_framebuffer_height,
-        g_content_scale_x, g_content_scale_y);
+        g_content_scale_x, g_content_scale_y,
+        rawScaledFramebuffer ? " raw-scaled" : "");
 
     if (fireCallbacks) {
         if (g_winsize_cb) g_winsize_cb((GLFWwindow*)&g_fake_window, g_window_width, g_window_height);
@@ -1463,11 +1476,15 @@ GLFWwindow* glfwCreateWindow(int w, int h, const char* title, GLFWmonitor*, GLFW
 
     if (w > 0) {
         g_window_width = w;
-        g_framebuffer_width = ScaleDimensionToPixels((FLOAT)w, g_content_scale_x, g_framebuffer_width);
+        g_framebuffer_width = UseRawScaledFramebuffer()
+            ? ScaleDimensionToPixels((FLOAT)w, g_content_scale_x, g_framebuffer_width)
+            : w;
     }
     if (h > 0) {
         g_window_height = h;
-        g_framebuffer_height = ScaleDimensionToPixels((FLOAT)h, g_content_scale_y, g_framebuffer_height);
+        g_framebuffer_height = UseRawScaledFramebuffer()
+            ? ScaleDimensionToPixels((FLOAT)h, g_content_scale_y, g_framebuffer_height)
+            : h;
     }
     RefreshWindowMetrics(false);
     if (!CreateEglContext()) {
