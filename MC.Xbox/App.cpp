@@ -2957,6 +2957,13 @@ static bool ConfigureSodiumDefaults(const std::wstring& gameDir, const std::wstr
 
         bool mixinChanged = false;
         mixinChanged |= UpsertPropertiesSettingWhenMissing(mixinConfigText, L"mixin.features.chunk_rendering", L"false");
+
+        // Sodium 0.2.x on 1.16 keeps particle renderer mixins active even when its
+        // chunk renderer is disabled, then crashes because SodiumWorldRenderer was
+        // never initialized. Newer legacy targets have been stable without this.
+        if (CompareVersionNumbers(w2a(minecraftVersion), "1.17") < 0) {
+            mixinChanged |= UpsertPropertiesSettingWhenMissing(mixinConfigText, L"mixin.features.particle", L"false");
+        }
         if (mixinChanged) {
             if (WriteTextFile(mixinConfigPath, mixinConfigText)) {
                 WriteLogF(L"Sodium legacy mixin config seeded for Minecraft %s: %s", minecraftVersion.c_str(), mixinConfigPath.c_str());
