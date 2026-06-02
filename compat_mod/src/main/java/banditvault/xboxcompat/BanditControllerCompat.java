@@ -35,6 +35,8 @@ public final class BanditControllerCompat {
     private static double cursorY = -1.0;
     private static long lastLookNanos;
     private static int scrollCooldown;
+    private static boolean crouchToggled;
+    private static boolean sprintToggled;
 
     private BanditControllerCompat() {
     }
@@ -47,6 +49,8 @@ public final class BanditControllerCompat {
         if (!poll()) {
             if (active) {
                 releaseGameplayKeys(client);
+                crouchToggled = false;
+                sprintToggled = false;
                 active = false;
             }
             return;
@@ -87,7 +91,12 @@ public final class BanditControllerCompat {
         }
         lastLookNanos = now;
 
-        applyLook(client.field_1724, axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_X), axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y), seconds);
+        BanditControllerSettings settings = BanditControllerSettings.get();
+        float y = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
+        if (settings.invertY) {
+            y = -y;
+        }
+        applyLook(client.field_1724, axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_X), y, seconds, settings);
     }
 
     public static void renderCursor(class_437 screen, class_4587 matrices) {
@@ -136,21 +145,41 @@ public final class BanditControllerCompat {
     }
 
     private static void tickGameplay(class_310 client) {
+        BanditControllerSettings settings = BanditControllerSettings.get();
         class_315 options = client.field_1690;
         float lx = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
         float ly = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
-        float rx = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_X);
-        float ry = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
 
-        setHeld(options.field_1894, ly < -MOVE_THRESHOLD);
-        setHeld(options.field_1881, ly > MOVE_THRESHOLD);
-        setHeld(options.field_1913, lx < -MOVE_THRESHOLD);
-        setHeld(options.field_1849, lx > MOVE_THRESHOLD);
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_BACK)) {
+            client.method_1507(new BanditControllerSettingsScreen(null));
+            return;
+        }
+
+        setHeld(options.field_1894, ly < -settings.moveDeadzone);
+        setHeld(options.field_1881, ly > settings.moveDeadzone);
+        setHeld(options.field_1913, lx < -settings.moveDeadzone);
+        setHeld(options.field_1849, lx > settings.moveDeadzone);
         setHeld(options.field_1903, button(GLFW.GLFW_GAMEPAD_BUTTON_A));
-        setHeld(options.field_1832, button(GLFW.GLFW_GAMEPAD_BUTTON_B));
+        if (settings.toggleCrouch) {
+            if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_B)) {
+                crouchToggled = !crouchToggled;
+            }
+            setHeld(options.field_1832, crouchToggled);
+        } else {
+            crouchToggled = false;
+            setHeld(options.field_1832, button(GLFW.GLFW_GAMEPAD_BUTTON_B));
+        }
         setHeld(options.field_1886, trigger(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER));
         setHeld(options.field_1904, trigger(GLFW.GLFW_GAMEPAD_AXIS_LEFT_TRIGGER));
-        setHeld(options.field_1867, button(GLFW.GLFW_GAMEPAD_BUTTON_LEFT_THUMB));
+        if (settings.toggleSprint) {
+            if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_LEFT_THUMB)) {
+                sprintToggled = !sprintToggled;
+            }
+            setHeld(options.field_1867, sprintToggled);
+        } else {
+            sprintToggled = false;
+            setHeld(options.field_1867, button(GLFW.GLFW_GAMEPAD_BUTTON_LEFT_THUMB));
+        }
 
         if (triggerPressed(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER)) {
             pressKey(options.field_1886);
@@ -160,6 +189,9 @@ public final class BanditControllerCompat {
         }
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_Y)) {
             pressKey(options.field_1822);
+        }
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_X)) {
+            pressKey(options.field_1869);
         }
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_LEFT_BUMPER)) {
             changeHotbarSlot(client.field_1724, -1);
@@ -174,6 +206,7 @@ public final class BanditControllerCompat {
     }
 
     private static void tickScreen(class_310 client, class_437 screen) {
+        BanditControllerSettings settings = BanditControllerSettings.get();
         if (cursorX < 0.0 || cursorY < 0.0) {
             cursorX = Math.max(1, screen.field_22789 / 2);
             cursorY = Math.max(1, screen.field_22790 / 2);
@@ -182,12 +215,21 @@ public final class BanditControllerCompat {
         float lx = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
         float ly = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
         float ry = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
-        double dx = shapedCursorAxis(lx);
-        double dy = shapedCursorAxis(ly);
+        double dx = shapedCursorAxis(lx, settings.cursorDeadzone);
+        double dy = shapedCursorAxis(ly, settings.cursorDeadzone);
 
-        cursorX = clamp(cursorX + dx * CURSOR_SPEED, 0.0, Math.max(1, screen.field_22789 - 1));
-        cursorY = clamp(cursorY + dy * CURSOR_SPEED, 0.0, Math.max(1, screen.field_22790 - 1));
+        cursorX = clamp(cursorX + dx * settings.cursorSpeed, 0.0, Math.max(1, screen.field_22789 - 1));
+        cursorY = clamp(cursorY + dy * settings.cursorSpeed, 0.0, Math.max(1, screen.field_22790 - 1));
         screen.method_16014(cursorX, cursorY);
+
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_BACK)) {
+            if (screen instanceof BanditControllerSettingsScreen) {
+                ((BanditControllerSettingsScreen)screen).close();
+            } else {
+                client.method_1507(new BanditControllerSettingsScreen(screen));
+            }
+            return;
+        }
 
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_A)) {
             screen.method_25402(cursorX, cursorY, LEFT_CLICK);
@@ -216,9 +258,9 @@ public final class BanditControllerCompat {
         if (scrollCooldown == 0) {
             double scroll = 0.0;
             if (ry < -0.35f || button(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_UP)) {
-                scroll = 1.0;
+                scroll = settings.scrollAmount;
             } else if (ry > 0.35f || button(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_DOWN)) {
-                scroll = -1.0;
+                scroll = -settings.scrollAmount;
             }
             if (scroll != 0.0) {
                 screen.method_25401(cursorX, cursorY, scroll);
@@ -227,9 +269,9 @@ public final class BanditControllerCompat {
         }
     }
 
-    private static void applyLook(class_746 player, float rx, float ry, float seconds) {
-        float lookX = shapedLookAxis(rx);
-        float lookY = shapedLookAxis(ry);
+    private static void applyLook(class_746 player, float rx, float ry, float seconds, BanditControllerSettings settings) {
+        float lookX = shapedLookAxis(rx, settings.lookDeadzone);
+        float lookY = shapedLookAxis(ry, settings.lookDeadzone);
         if (lookX == 0.0f && lookY == 0.0f) {
             return;
         }
@@ -237,7 +279,7 @@ public final class BanditControllerCompat {
         try {
             float yaw = getEntityFloat(player, "field_6031");
             float pitch = getEntityFloat(player, "field_5965");
-            float scale = LOOK_SPEED_PER_SECOND * seconds;
+            float scale = settings.lookSpeed * seconds;
             setEntityFloat(player, "field_6031", yaw + lookX * scale);
             setEntityFloat(player, "field_5965", (float)clamp(pitch + lookY * scale, -90.0, 90.0));
         } catch (Throwable t) {
@@ -346,7 +388,7 @@ public final class BanditControllerCompat {
     }
 
     private static boolean trigger(int index) {
-        return axis(index) > 0.25f;
+        return axis(index) > BanditControllerSettings.get().triggerDeadzone;
     }
 
     private static boolean triggerPressed(int index) {
@@ -373,24 +415,24 @@ public final class BanditControllerCompat {
         LAST_TRIGGER_HELD[1] = trigger(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER);
     }
 
-    private static float shapedLookAxis(float value) {
+    private static float shapedLookAxis(float value, float deadzone) {
         value = clampAxis(value);
         float abs = Math.abs(value);
-        if (abs < LOOK_DEADZONE) {
+        if (abs < deadzone) {
             return 0.0f;
         }
-        float shaped = (abs - LOOK_DEADZONE) / (1.0f - LOOK_DEADZONE);
+        float shaped = (abs - deadzone) / (1.0f - deadzone);
         shaped = shaped * shaped;
         return Math.copySign(shaped, value);
     }
 
-    private static double shapedCursorAxis(float value) {
+    private static double shapedCursorAxis(float value, float deadzone) {
         value = clampAxis(value);
         float abs = Math.abs(value);
-        if (abs < 0.12f) {
+        if (abs < deadzone) {
             return 0.0;
         }
-        return Math.copySign((abs - 0.12f) / 0.88f, value);
+        return Math.copySign((abs - deadzone) / (1.0f - deadzone), value);
     }
 
     private static float clampAxis(float value) {

@@ -45,7 +45,7 @@ $disabledSources = @()
 $controllerCompatVersions = @("1.16.5", "1.19.2")
 if ($controllerCompatVersions -notcontains $MinecraftVersion) {
     $disabledMixins += @("BanditControllerClientMixin", "BanditControllerGameRendererMixin", "BanditControllerHandledScreenMixin", "BanditControllerRecipeBookScreenMixin", "BanditControllerScreenMixin")
-    $disabledSources += "BanditControllerCompat"
+    $disabledSources += @("BanditControllerCompat", "BanditControllerSettings", "BanditControllerSettingsScreen")
 }
 
 $sources = Get-ChildItem $srcJava -Recurse -Filter "*.java" | Select-Object -ExpandProperty FullName
@@ -97,6 +97,14 @@ if ($oshiJar) {
     $compileJars += $oshiJar.FullName
 } else {
     Write-Warning "OSHI jar not found in cache; SystemDetailsOshiBypassMixin may fail to compile."
+}
+$brigadierJar = Get-ChildItem -LiteralPath (Join-Path $gameDir "libraries\com\mojang\brigadier") -Recurse -Filter "brigadier-*.jar" -ErrorAction SilentlyContinue |
+    Sort-Object FullName -Descending |
+    Select-Object -First 1
+if ($brigadierJar) {
+    $compileJars += $brigadierJar.FullName
+} else {
+    Write-Warning "Brigadier jar not found in cache; controller settings screen may fail to compile."
 }
 $cp = $compileJars -join ";"
 $javaRelease = if ($MinecraftVersion -eq $ProjectConfig.MinecraftVersion) { 21 } else { 8 }
