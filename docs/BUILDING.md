@@ -213,6 +213,8 @@ missing or stale files.
 
 Do not redistribute generated APPX packages without prior written permission. Nightly and pre release APPX packages are for testing only, are unsupported, and are not full game releases.
 
+Do not publish public forks, mirrors, modified public copies, or builds that remove, bypass, disable, stub, fake, or make optional Microsoft/Xbox authentication or Minecraft entitlement checks.
+
 Public video tutorials or other install guides for nightly or pre release APPX packages are not permitted until the full release.
 
 Downloaded runtime files land under:
@@ -306,7 +308,7 @@ The GitHub Actions workflow in `.github/workflows/nightly.yml` builds and publis
 
 The workflow publishes `BanditLauncher-nightly.appx` and `BanditLauncher-nightly.sha256` to the `nightly` release, and force moves the `nightly` tag to the commit that produced the package.
 
-Nightly releases are experimental, unsupported, and not full game releases. The generated release notes also remind users that APPX redistribution and public install tutorials for nightly builds are not permitted before the full release.
+Nightly releases are experimental, unsupported, and not full game releases. The generated release notes also remind users that APPX redistribution, public install tutorials, public mirrors, public modified copies, and auth bypass builds are not permitted before the full release.
 
 Useful options:
 

@@ -158,8 +158,10 @@ Then apply when the preview looks right:
 
 ## License And Ownership
 
-Original project code in this repository is available under the custom terms in [LICENSE](LICENSE). Use is allowed with credit. Redistribution requires prior written permission from veroxsity / BanditVault.
+Original project code in this repository is available under the custom terms in [LICENSE](LICENSE). Private use is allowed with credit. Public forks, redistribution, mirrors, modified public copies, and packaged builds require prior written permission from veroxsity / BanditVault.
 
-Redistribution of generated APPX packages is not permitted without prior written permission. Public install tutorials or videos for nightly or pre release builds are not permitted until the full release.
+Redistribution of generated APPX packages, including nightly and pre release packages, is not permitted without prior written permission. Public install tutorials or videos for nightly or pre release builds are not permitted until the full release.
+
+Removing, bypassing, disabling, stubbing, faking, or making optional Microsoft/Xbox authentication or Minecraft entitlement checks is not permitted.
 
 Minecraft, Fabric, Mojang assets, Mesa, LWJGL, Java, and other external components remain under their own licenses and terms.

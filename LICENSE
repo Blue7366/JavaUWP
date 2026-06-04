@@ -26,6 +26,11 @@ You may create private forks or private modified copies for your own personal,
 educational, research, or internal purposes, provided that those copies are not
 distributed outside your control.
 
+Any fork, mirror, hosted copy, backup repository, or modified source repository
+created under this license must remain private unless veroxsity / BanditVault
+has given prior written permission for public hosting. Public forks, public
+mirrors, public source archives, and public modified copies are not permitted.
+
 You may not, without prior written permission from veroxsity / BanditVault:
 
 1. Redistribute, publish, mirror, upload, or otherwise share copies of this
@@ -34,10 +39,22 @@ You may not, without prior written permission from veroxsity / BanditVault:
 2. Sublicense, sell, rent, lease, or commercially offer this project or any
    derivative work based on it.
 3. Remove or obscure attribution, copyright notices, or license notices.
-4. Use this project to distribute Minecraft, Mojang assets, proprietary game
+4. Remove, bypass, disable, weaken, stub, fake, or make optional Microsoft/Xbox
+   authentication, Minecraft ownership verification, token validation, account
+   checks, or entitlement enforcement.
+5. Add or distribute offline sessions, forged sessions, fake access tokens,
+   fake UUIDs, fake XUIDs, fake Minecraft profiles, or alternate launch paths
+   intended to run Minecraft without legitimate authentication and entitlement
+   verification.
+6. Publish, distribute, host, or provide instructions, patches, binaries,
+   scripts, configuration, or other material intended to bypass authentication
+   or ownership verification in this project.
+7. Use this project to distribute Minecraft, Mojang assets, proprietary game
    files, third-party runtime images, or other content you do not have the
    legal right to distribute.
-5. Publicly display, broadcast, stream, publish, upload, share, or otherwise
+8. Redistribute, mirror, re upload, re package, or otherwise share nightly,
+   pre release, release candidate, test, or generated APPX packages.
+9. Publicly display, broadcast, stream, publish, upload, share, or otherwise
    distribute footage, screenshots, demonstrations, gameplay, benchmarks,
    reviews, tutorials, or videos of this project, in whole or in part.
 
