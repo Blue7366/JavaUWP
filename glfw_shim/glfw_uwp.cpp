@@ -1386,7 +1386,10 @@ static bool CreateEglContext() {
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         wchar_t dir[MAX_PATH];
-        GetRuntimeDir(dir, MAX_PATH);
+        DWORD logLen = GetEnvironmentVariableW(L"MC_LOG_DIR", dir, MAX_PATH);
+        if (logLen == 0 || logLen >= MAX_PATH) {
+            GetRuntimeDir(dir, MAX_PATH);
+        }
         swprintf_s(g_log_path, L"%s\\glfw_uwp.log", dir);
         FILE* f = NULL;
         _wfopen_s(&f, g_log_path, L"w");

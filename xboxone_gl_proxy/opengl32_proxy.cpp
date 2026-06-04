@@ -8,6 +8,13 @@ static wchar_t g_log_path[MAX_PATH] = {};
 static void InitLogPath() {
     if (g_log_path[0]) return;
 
+    wchar_t logDir[MAX_PATH] = {};
+    DWORD logLen = GetEnvironmentVariableW(L"MC_LOG_DIR", logDir, ARRAYSIZE(logDir));
+    if (logLen > 0 && logLen < ARRAYSIZE(logDir)) {
+        swprintf_s(g_log_path, L"%s\\xboxone_gl_proxy.log", logDir);
+        return;
+    }
+
     wchar_t runtimeDir[MAX_PATH] = {};
     DWORD len = GetEnvironmentVariableW(L"MC_RUNTIME_DIR", runtimeDir, ARRAYSIZE(runtimeDir));
     if (len > 0 && len < ARRAYSIZE(runtimeDir)) {
