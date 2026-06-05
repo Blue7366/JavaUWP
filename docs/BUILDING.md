@@ -40,7 +40,7 @@ Current defaults:
 - LWJGL GLFW natives: `3.3.3`
 - JNA: `5.17.0`
 
-The default target is `1.21.11 + Fabric 0.19.2`, but the package also includes catalog entries and per target runtime manifests for the Fabric targets listed in `config\versions.tsv`.
+The default target is `1.21.11 + Fabric 0.19.2`, but the package also includes catalog entries and per target runtime manifests for the playable targets listed in `config\versions.tsv`, including the experimental `1.21.1 + NeoForge 21.1.233` target.
 
 The main build accepts temporary overrides:
 
@@ -58,9 +58,11 @@ For changing the default target, update:
 - `config/versions.tsv` if the target should appear in the launcher catalog
 - `compat_mod/src/main/resources/fabric.mod.json` only if the compatibility mod metadata needs a new default range
 
-Then recreate the local `gameDir`, natives, remapped jars, and patched Fabric Loader as needed. The installed app downloads official runtime libraries, client jars, and assets into UWP `LocalState`; they are not bundled into the APPX.
+Then recreate the local `gameDir`, natives, remapped jars, and patched loader files as needed. The installed app downloads official runtime libraries, client jars, and assets into UWP `LocalState`; they are not bundled into the APPX.
 
 For adding another playable Fabric target, add it to `config\versions.tsv`, make sure the Fabric loader version can be patched, and let `build.ps1` generate the per target manifest and compatibility mod jar.
+
+For adding another playable NeoForge target, the launcher needs matching NeoForge install metadata in the generated manifest and a launch provider path in `MC.Xbox\App.cpp`. NeoForge generates patched client artifacts on first launch from downloaded official inputs. Do not commit or redistribute generated NeoForge client jars.
 
 ## Mesa runtime
 
@@ -196,6 +198,7 @@ jre\
 natives\
 graphics\
 runtime\libraries\...\fabric-loader-<version>.jar
+securejarhandler-uwp-patch.jar
 runtime\bundled-mods\
 runtime\version_catalog.tsv
 runtime\manifests\
@@ -294,6 +297,12 @@ The top level build runs this step automatically. You can also run it directly:
 The script overlays patched Fabric Loader classes into the local ignored loader JAR under `staging\cache\gameDir`.
 The package step patches and copies every Fabric loader version needed by `config\versions.tsv`, currently including `0.19.2` and `0.14.25`.
 
+## Patch securejarhandler for NeoForge
+
+The top level build also builds `securejarhandler-uwp-patch.jar` from sources under `patch\securejarhandler`. NeoForge uses securejarhandler and Java module layers to discover and load mods. The patch keeps that path working inside UWP by avoiding sandbox hostile file handling and by preserving access between the NeoForge and Minecraft modules.
+
+This patch is packaged as launcher owned runtime content and applied with `--patch-module` during NeoForge launches.
+
 ## Build package
 
 Run:
@@ -326,13 +335,13 @@ The build script:
 1. Generates `runtime_config.h` for the selected versions.
 2. Builds `MC.Xbox.exe`.
 3. Builds the UWP GLFW shim.
-4. Builds the Fabric compatibility mod.
-5. Patches the local Fabric Loader JAR.
+4. Builds the compatibility mod.
+5. Patches the local Fabric Loader JAR and builds the securejarhandler UWP patch.
 6. Assembles `staging\package`.
 7. Copies the version catalog.
-8. Copies patched Fabric Loader jars, patched TinyRemapper for legacy Fabric, bundled mods, log config, natives, Mesa/MobileGlues graphics DLLs, and the JREs.
+8. Copies patched Fabric Loader jars, patched TinyRemapper for legacy Fabric, the securejarhandler patch, bundled mods, log config, natives, Mesa/MobileGlues graphics DLLs, and the JREs.
 9. Generates `download_manifest.tsv` for the default official Minecraft/Fabric runtime downloads.
-10. Generates `runtime\manifests\<target-id>.tsv` for cataloged Fabric targets.
+10. Generates `runtime\manifests\<target-id>.tsv` for cataloged Fabric and NeoForge targets.
 11. Builds per target compatibility mod jars under `runtime\version-mods`.
 12. Generates UWP tile and splash assets from `MC.Xbox\Assets\Java_UWP_Icon.png`.
 13. Creates and signs `output\BanditLauncher_<appx-version>.appx`.

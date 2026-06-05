@@ -1,6 +1,6 @@
 # Patching Notes
 
-Minecraft, Fabric, LWJGL, and Java expect desktop Windows behavior. Xbox Developer Mode UWP runs inside a packaged sandbox, so a few targeted patches are needed.
+Minecraft, Fabric, NeoForge, LWJGL, and Java expect desktop Windows behavior. Xbox Developer Mode UWP runs inside a packaged sandbox, so a few targeted patches are needed.
 
 ## Fabric Loader patch
 
@@ -41,7 +41,7 @@ The top level build also runs it automatically.
 
 ## Compatibility mod
 
-`compat_mod` is a Fabric client mod with mixins for Minecraft, mod, controller, filesystem, and graphics code paths that need sandbox aware behavior.
+`compat_mod` is a client compatibility mod with mixins for Minecraft, mod, controller, filesystem, and graphics code paths that need sandbox aware behavior. It is built per target and copied into the active profile when that target needs it.
 
 Current mixins:
 
@@ -72,7 +72,32 @@ You can build a specific target with:
 
 The build disables mixins and sources that do not apply to the requested Minecraft version. Controller sources are included for legacy controller targets such as `1.16.5` and `1.19.2`, and excluded from modern targets where Controlify is the expected controller mod.
 
-The top level package step places the default compatibility mod under `runtime\bundled-mods`, and places per target compatibility mod jars under `runtime\version-mods\<target-id>`. The UWP host copies the right launcher owned mods into writable `LocalState\game\mods` on launch.
+The top level package step places the default compatibility mod under `runtime\bundled-mods`, and places per target compatibility mod jars under `runtime\version-mods\<target-id>`. The UWP host copies the right launcher owned mods into the active profile's writable game folder on launch.
+
+## NeoForge securejarhandler patch
+
+NeoForge uses securejarhandler, bootstraplauncher, Java module layers, and installer generated client artifacts instead of Fabric's Knot launch path. The package builds:
+
+```text
+securejarhandler-uwp-patch.jar
+```
+
+from sources under:
+
+```text
+patch\securejarhandler\
+```
+
+The patch is applied during NeoForge startup with `--patch-module=cpw.mods.securejarhandler=...`.
+
+The main goals are:
+
+- Keep securejarhandler from relying on file system behavior that fails inside UWP.
+- Let NeoForge locate its universal jar as a mod instead of accidentally preloading it on the normal class path.
+- Preserve the module read paths NeoForge needs between its own module and the generated Minecraft module.
+- Provide a fallback path for Minecraft classes when the secure jar module loader resolves classes differently under the embedded JVM.
+
+NeoForge client artifacts are generated on the device from downloaded official inputs and installer metadata. Generated NeoForge client jars must stay out of the repository and normal distributable packages.
 
 ## GLFW shim
 
@@ -112,9 +137,10 @@ The package includes:
 runtime\version_catalog.tsv
 runtime\manifests\<target-id>.tsv
 runtime\version-mods\<target-id>\
+securejarhandler-uwp-patch.jar
 ```
 
-The root `download_manifest.tsv` remains the default target manifest. The `runtime\manifests` folder contains per target manifests for cataloged Fabric targets.
+The root `download_manifest.tsv` remains the default target manifest. The `runtime\manifests` folder contains per target manifests for cataloged Fabric and NeoForge targets.
 
 `MC.Xbox.exe` writes a `LocalState\.download_manifest` marker containing the selected launch target and packaged manifest hash. If that marker changes, the launcher removes downloaded official runtime folders before validating the new manifest. The signed in menu's `Repair downloads` action forces this cleanup for the current target.
 
@@ -134,8 +160,8 @@ When changing the default Minecraft or Fabric Loader version:
 4. Recreate `staging\cache\gameDir`.
 5. Recreate `staging\cache\natives-1.21` if native versions changed.
 6. Run the local Fabric client once so remapped jars are generated for the default target.
-7. Run `.\build.ps1`; the build regenerates the default manifest, per target manifests, patched loader jars, and per target compatibility mod jars.
+7. Run `.\build.ps1`; the build regenerates the default manifest, per target manifests, patched loader jars, securejarhandler patch, and per target compatibility mod jars.
 
-Forge, NeoForge, and older vanilla targets can be cataloged before their launch providers are implemented, but they should stay experimental until their providers are complete.
+NeoForge `1.21.1 + 21.1.233` currently has an experimental launch provider. Forge and older vanilla targets can be cataloged before their launch providers are implemented, but they should stay experimental until their providers are complete.
 
 Do not commit generated game files, downloaded assets, natives, certificates, app packages, logs, or saves.

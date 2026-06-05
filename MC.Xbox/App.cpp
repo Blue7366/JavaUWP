@@ -7217,6 +7217,17 @@ static std::vector<std::wstring> RecommendedSlugsForTarget(const LaunchTarget& t
     std::wstring loader = target.loader;
     std::transform(loader.begin(), loader.end(), loader.begin(),
         [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    if (loader == L"neoforge") {
+        if (CompareVersionNumbers(version, "1.21.1") >= 0) {
+            return {
+                L"sodium",
+                L"controlify",
+                L"jei"
+            };
+        }
+        return {};
+    }
+
     if (loader != L"fabric") {
         return {};
     }

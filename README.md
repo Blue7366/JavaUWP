@@ -5,10 +5,11 @@
 ![UWP](https://img.shields.io/badge/app-UWP-0078d4)
 ![Minecraft Java](https://img.shields.io/badge/Minecraft-Java%20Edition-62b47a)
 ![Fabric](https://img.shields.io/badge/loader-Fabric-f6c344)
+![NeoForge](https://img.shields.io/badge/loader-NeoForge-f16436)
 
-Bandit Launcher is a Minecraft Java Edition launcher for Xbox Developer Mode. It packages a UWP host, a custom GLFW shim, a Java runtime, Fabric support, and an Xbox compatibility mod so Java Edition can run inside the Xbox app sandbox.
+Bandit Launcher is a Minecraft Java Edition launcher for Xbox Developer Mode. It packages a UWP host, a custom GLFW shim, Java runtimes, Fabric and NeoForge support, and Xbox compatibility fixes so Java Edition can run inside the Xbox app sandbox.
 
-This is a real pre release. The launcher is playable, supports multiple Minecraft targets, can install compatible Fabric mods from Modrinth, and includes active fixes for Xbox input, graphics, Java, and filesystem behavior.
+This is a real pre release. The launcher is playable, supports multiple Minecraft targets, can install compatible mods and modpacks from Modrinth, and includes active fixes for Xbox input, graphics, Java, and filesystem behavior.
 
 ## Pre Release Status
 
@@ -24,24 +25,25 @@ The launcher now treats a playable setup as a launch target:
 minecraft version + loader + loader version
 ```
 
-Current Fabric targets:
+Current launch targets:
 
 | Target | State | Notes |
 | --- | --- | --- |
 | `1.21.11 + Fabric 0.19.2` | Supported | Current default target. Base game and Controlify have been tested. |
 | `1.21.1 + Fabric 0.19.2` | Testing | Base game, Controlify, and Cobblemon have been verified. Uses Java 21 for mods that require it. |
+| `1.21.1 + NeoForge 21.1.233` | Experimental | Base game, Controlify, Sodium, JEI, and Modrinth modpack installs have been tested. Uses Java 21. |
 | `1.20.4 + Fabric 0.19.2` | Testing | Base game and Controlify have been tested. Uses Java 21. |
 | `1.20.1 + Fabric 0.19.2` | Testing | Included for nearby 1.20.x mod support. Still needs broader testing. |
 | `1.19.2 + Fabric 0.14.25` | Testing | Base game and controller support have been tested. Uses Java 21. |
 | `1.16.5 + Fabric 0.14.25` | Testing | Legacy target under active validation. Uses Java 21 and the built in controller layer. |
 
-Targets for NeoForge, Forge, and older vanilla versions may appear in the catalog, but their launch providers are not finished yet.
+Forge and older vanilla versions may appear in the catalog, but their launch providers are not finished yet.
 
 ## Features
 
 - Microsoft sign in with device code flow.
 - Minecraft Java ownership verification before runtime downloads.
-- Dynamic official Minecraft, asset, library, and Fabric downloads into UWP `LocalState`.
+- Dynamic official Minecraft, asset, library, Fabric, and NeoForge downloads into UWP `LocalState`.
 - Multiple Minecraft launch targets without rebuilding the APPX.
 - Profile targets, so each profile can carry its own Minecraft version and loader.
 - Persistent isolated profile storage under UWP `LocalState`.
@@ -50,6 +52,7 @@ Targets for NeoForge, Forge, and older vanilla versions may appear in the catalo
 - Browser based mod, resource pack, and datapack uploads to the active profile.
 - Current and previous run logs, plus packaged crash report zips.
 - Per version Fabric loader support.
+- Initial NeoForge 1.21.1 launch provider support.
 - Java 21 runtime support for mods that pin or require Java 21.
 - Packaged Java 25 runtime for the current default target.
 - Custom GLFW shim for UWP windowing, input, gamepad state, and EGL.
@@ -65,10 +68,16 @@ Targets for NeoForge, Forge, and older vanilla versions may appear in the catalo
 
 For the best current experience, install recommended mods from the Mods page after signing in.
 
-For modern targets:
+For modern Fabric targets:
 
 - Sodium
 - Controlify
+
+For `1.21.1 + NeoForge 21.1.233`:
+
+- Sodium
+- Controlify
+- JEI
 
 For legacy targets such as `1.19.2` and `1.16.5`, Bandit Launcher also includes its own controller support layer. Sodium can still help performance, but older Sodium versions may need launcher compatibility settings that are seeded automatically.
 
@@ -137,7 +146,8 @@ LocalState
 These are the main areas still being worked on for the pre release:
 
 - Xbox One support is experimental.
-- Forge and NeoForge targets are cataloged but not launchable yet.
+- Forge and older vanilla targets are cataloged but not launchable yet.
+- NeoForge support is new and currently focused on `1.21.1 + NeoForge 21.1.233`.
 - Mod compatibility depends on each mod working inside the Xbox UWP sandbox.
 - First launch can take a while because official files need to download.
 - Chunk loading can still be choppy on some older versions.
@@ -154,7 +164,7 @@ java -jar .\staging\cache\tools\fabric-installer.jar client -dir .\staging\cache
 .\build.ps1
 ```
 
-The build script compiles the UWP host, builds the GLFW shim, builds the compatibility mod, patches Fabric Loader, generates runtime download manifests, copies launcher owned runtime files, creates UWP assets, packages the APPX, and signs it.
+The build script compiles the UWP host, builds the GLFW shim, builds the compatibility mod, patches Fabric Loader and securejarhandler, generates runtime download manifests, copies launcher owned runtime files, creates UWP assets, packages the APPX, and signs it.
 
 Generated build output goes to `staging` and `output`. These folders are ignored by git.
 
@@ -164,8 +174,8 @@ Generated build output goes to `staging` and `output`. These folders are ignored
 | --- | --- |
 | `MC.Xbox/` | UWP host, launcher UI, Microsoft auth, runtime preparation, JVM startup, and launch logic. |
 | `glfw_shim/` | Replacement `glfw.dll` that maps LWJGL window, input, gamepad, and EGL behavior onto UWP. |
-| `compat_mod/` | Fabric compatibility mod for Minecraft, mod, controller, filesystem, and graphics fixes. |
-| `patch/` | Patched Fabric Loader classes used by the build. |
+| `compat_mod/` | Compatibility mod for Minecraft, mod, controller, filesystem, and graphics fixes. |
+| `patch/` | Patched Fabric Loader and securejarhandler classes used by the build. |
 | `scripts/` | Setup, cleanup, asset, patch, manifest, and build helpers. |
 | `mesa-runtime/` | Mesa UWP runtime DLLs used by local builds. |
 | `build.ps1` | Main APPX build script. |
@@ -198,7 +208,7 @@ Runtime game files are downloaded by the installed app after ownership verificat
 9. The app uses the selected profile's isolated game folder for saves, mods, resource packs, config, and logs.
 10. The app publishes the live UWP `CoreWindow` for EGL.
 11. The app loads `jvm.dll` and starts Java in the same process.
-12. Fabric launches Minecraft.
+12. The selected loader launches Minecraft.
 13. LWJGL loads the custom `glfw.dll`.
 14. Mesa translates OpenGL calls to D3D12 on the Xbox graphics path.
 15. Remote Files can be started from the launcher to upload profile files or download diagnostics from another device.
