@@ -48,7 +48,7 @@ The main build accepts temporary overrides:
 .\build.ps1 -McVersion 1.21.11 -FabricLoader 0.19.2 -AssetIndex 29
 ```
 
-These values are passed into setup helpers and into the generated host header used by `MC.Xbox\App.cpp`.
+These values are passed into setup helpers and into the generated `runtime_config.h` header used across `MC.Xbox/` host modules.
 
 The `JavaRelease` value is the minimum Java version the scripts search for when compiling Java helpers and the compatibility mod. The package also copies a current JRE into `jre\` and an exact Java 21 runtime into `jre21\` so targets and mods can choose the runtime they need.
 
@@ -60,9 +60,36 @@ For changing the default target, update:
 
 Then recreate the local `gameDir`, natives, remapped jars, and patched loader files as needed. The installed app downloads official runtime libraries, client jars, and assets into UWP `LocalState`; they are not bundled into the APPX.
 
-For adding another playable Fabric target, add it to `config\versions.tsv`, make sure the Fabric loader version can be patched, and let `build.ps1` generate the per target manifest and compatibility mod jar.
+For adding another playable Fabric target, add it to `config\versions.tsv`, make sure the Fabric loader version can be patched, and let `build.ps1` generate the per target manifest and compatibility mod jar. Update `launch\loaders\fabric.cpp` only if the target needs loader specific classpath or JVM behavior beyond the generated manifest.
 
-For adding another playable NeoForge target, the launcher needs matching NeoForge install metadata in the generated manifest and a launch provider path in `MC.Xbox\App.cpp`. NeoForge generates patched client artifacts on first launch from downloaded official inputs. Do not commit or redistribute generated NeoForge client jars.
+For adding another playable NeoForge target, the launcher needs matching NeoForge install metadata in the generated manifest and launch provider logic in `MC.Xbox\launch\loaders\neoforge.cpp` (dispatched through `launch\loaders\loader.cpp`). NeoForge generates patched client artifacts on first launch from downloaded official inputs. Do not commit or redistribute generated NeoForge client jars.
+
+Forge catalog entries exist, but `launch\loaders\forge.cpp` is still a stub. See [ARCHITECTURE.md](ARCHITECTURE.md) for the loader plugin layout and where to implement Forge later.
+
+## UWP host source layout
+
+The UWP host is no longer a single `App.cpp` monolith. `MC.Xbox\App.cpp` keeps the UWP shell and `Run()` orchestration. Feature code lives in folders compiled by `build.ps1`:
+
+```text
+MC.Xbox\
+  App.cpp
+  common\
+  net\
+  auth\
+  ui\
+  mods\
+  profiles\
+  launch\
+    runtime_manager.*
+    minecraft_launch.*
+    loaders\
+      loader.*
+      fabric.*
+      neoforge.*
+      forge.*
+```
+
+For module responsibilities, launch flow, and loader hook details, read [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Mesa runtime
 
@@ -211,7 +238,7 @@ It does not contain Mojang libraries, Minecraft client jars, Minecraft version
 JSON files, asset indexes, asset objects, or Fabric remapped jars. During build,
 `scripts\new-download-manifest.ps1` writes `download_manifest.tsv` from official
 Mojang and Fabric metadata. During launch, after ownership verification,
-`MC.Xbox.exe` verifies the manifest entries under `LocalState` and downloads any
+`MC.Xbox.exe` (implemented mainly in `launch\runtime_manager.cpp`) verifies the manifest entries under `LocalState` and downloads any
 missing or stale files.
 
 Do not redistribute generated APPX packages without prior written permission. Nightly and pre release APPX packages are for testing only, are unsupported, and are not full game releases.

@@ -7,3 +7,5 @@ Please do not submit changes that remove login, bypass ownership verification, a
 Do not commit secrets such as signing keys, private certificates, refresh tokens, service credentials, or privileged API keys.
 
 For normal development, keep changes scoped, follow the existing code style, and include logs or test notes for fixes that affect launch, downloads, profiles, graphics, controller input, or remote files.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the UWP host layout, launch flow, and loader module map.

@@ -1,0 +1,1164 @@
+﻿#pragma once
+
+#include "auth_ui_state.h"
+#include "launcher_common.h"
+#include "mods_ui_globals.h"
+#include "profiles.h"
+
+#include <d2d1_1.h>
+#include <dwrite.h>
+#include <d3d11_1.h>
+#include <dxgi1_3.h>
+#include <wincodec.h>
+#include <wrl.h>
+#include <windows.foundation.h>
+#include <windows.ui.core.h>
+
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+using namespace ABI::Windows::Foundation;
+using namespace ABI::Windows::UI::Core;
+
+#include "mods_browser.h"
+
+void ProcessAuthUiEvents();
+
+class AuthScreenRenderer {
+public:
+    bool Initialize(ICoreWindow* window) {
+        if (!window) return false;
+        WriteLog(L"Auth screen Initialize started");
+        window_ = window;
+
+        Rect bounds = {};
+        if (FAILED(window->get_Bounds(&bounds))) {
+            bounds.Width = 1280;
+            bounds.Height = 720;
+        }
+        width_ = bounds.Width > 0 ? bounds.Width : 1280;
+        height_ = bounds.Height > 0 ? bounds.Height : 720;
+
+        const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        D3D_FEATURE_LEVEL levels[] = {
+            D3D_FEATURE_LEVEL_11_1,
+            D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1,
+            D3D_FEATURE_LEVEL_10_0
+        };
+        D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
+        HRESULT hr = D3D11CreateDevice(
+            nullptr,
+            D3D_DRIVER_TYPE_HARDWARE,
+            nullptr,
+            flags,
+            levels,
+            ARRAYSIZE(levels),
+            D3D11_SDK_VERSION,
+            d3dDevice_.GetAddressOf(),
+            &level,
+            d3dContext_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D3D11CreateDevice hardware failed hr=0x%08X; trying WARP", hr);
+            hr = D3D11CreateDevice(
+                nullptr,
+                D3D_DRIVER_TYPE_WARP,
+                nullptr,
+                flags,
+                levels,
+                ARRAYSIZE(levels),
+                D3D11_SDK_VERSION,
+                d3dDevice_.ReleaseAndGetAddressOf(),
+                &level,
+                d3dContext_.ReleaseAndGetAddressOf());
+            if (FAILED(hr)) {
+                WriteLogF(L"Auth screen D3D11CreateDevice failed hr=0x%08X", hr);
+                return false;
+            }
+        }
+
+        hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D2D factory failed hr=0x%08X", hr);
+            return false;
+        }
+
+        ComPtr<IDXGIDevice> dxgiDevice;
+        hr = d3dDevice_.As(&dxgiDevice);
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen IDXGIDevice query failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = d2dFactory_->CreateDevice(dxgiDevice.Get(), d2dDevice_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D2D device failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = d2dDevice_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, d2dContext_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D2D context failed hr=0x%08X", hr);
+            return false;
+        }
+
+        ComPtr<IDXGIAdapter> adapter;
+        hr = dxgiDevice->GetAdapter(adapter.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen DXGI adapter failed hr=0x%08X", hr);
+            return false;
+        }
+
+        ComPtr<IDXGIFactory2> dxgiFactory;
+        hr = adapter->GetParent(IID_PPV_ARGS(dxgiFactory.GetAddressOf()));
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen DXGI factory failed hr=0x%08X", hr);
+            return false;
+        }
+
+        DXGI_SWAP_CHAIN_DESC1 desc = {};
+        desc.Width = static_cast<UINT>(width_);
+        desc.Height = static_cast<UINT>(height_);
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.Stereo = FALSE;
+        desc.SampleDesc.Count = 1;
+        desc.SampleDesc.Quality = 0;
+        desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        desc.BufferCount = 2;
+        desc.Scaling = DXGI_SCALING_STRETCH;
+        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+
+        hr = dxgiFactory->CreateSwapChainForCoreWindow(
+            d3dDevice_.Get(),
+            reinterpret_cast<IUnknown*>(window),
+            &desc,
+            nullptr,
+            swapChain_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen swap chain failed hr=0x%08X", hr);
+            return false;
+        }
+
+        ComPtr<IDXGISurface> backBuffer;
+        hr = swapChain_->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen back buffer failed hr=0x%08X", hr);
+            return false;
+        }
+
+        D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+            96.0f,
+            96.0f);
+        hr = d2dContext_->CreateBitmapFromDxgiSurface(backBuffer.Get(), &props, targetBitmap_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen target bitmap failed hr=0x%08X", hr);
+            return false;
+        }
+        d2dContext_->SetTarget(targetBitmap_.Get());
+
+        hr = DWriteCreateFactory(
+            DWRITE_FACTORY_TYPE_SHARED,
+            __uuidof(IDWriteFactory),
+            reinterpret_cast<IUnknown**>(dwriteFactory_.GetAddressOf()));
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen DWrite factory failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(wicFactory_.GetAddressOf()));
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen WIC factory failed hr=0x%08X", hr);
+        }
+
+        CreateTextFormats();
+        WriteLogF(L"Auth screen initialized %.0fx%.0f featureLevel=0x%X",
+            width_, height_, static_cast<unsigned int>(level));
+        return true;
+    }
+
+    void Render(const AuthUiState& state) {
+        if (!d2dContext_ || !swapChain_) return;
+
+        ComPtr<ID2D1SolidColorBrush> white;
+        ComPtr<ID2D1SolidColorBrush> muted;
+        ComPtr<ID2D1SolidColorBrush> panel;
+        ComPtr<ID2D1SolidColorBrush> accent;
+        ComPtr<ID2D1SolidColorBrush> danger;
+        ComPtr<ID2D1SolidColorBrush> black;
+        ComPtr<ID2D1SolidColorBrush> softEdge;
+        ComPtr<ID2D1SolidColorBrush> surfaceFill;
+        ComPtr<ID2D1SolidColorBrush> accentSoft;
+
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0xF5F7F8), white.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0xA9B0B4), muted.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x151718), panel.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x70C486), accent.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0xE36A5C), danger.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x000000), black.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF, 0.12f), softEdge.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x161B1F, 0.75f), surfaceFill.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x70C486, 0.14f), accentSoft.GetAddressOf());
+
+        d2dContext_->BeginDraw();
+        d2dContext_->Clear(D2D1::ColorF(0x05080B));
+        FillVerticalGradient(D2D1::RectF(0.0f, 0.0f, width_, height_), 0x0E1726, 0x05080B);
+
+        const float marginX = width_ * 0.075f;
+        const float marginY = height_ * 0.11f;
+        const D2D1_RECT_F frame = D2D1::RectF(marginX, marginY, width_ - marginX, height_ - marginY);
+        {
+            ComPtr<ID2D1SolidColorBrush> surface, surfaceEdge;
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x0C0F12, 0.92f), surface.GetAddressOf());
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF, 0.10f), surfaceEdge.GetAddressOf());
+            FillRound(frame, surface.Get(), 22.0f);
+            StrokeRound(frame, surfaceEdge.Get(), 22.0f, 1.5f);
+        }
+
+        auto finishDraw = [&]() {
+            HRESULT hr = d2dContext_->EndDraw();
+            if (FAILED(hr)) {
+                WriteLogF(L"Auth screen EndDraw failed hr=0x%08X", hr);
+            }
+            hr = swapChain_->Present(1, 0);
+            if (FAILED(hr)) {
+                WriteLogF(L"Auth screen Present failed hr=0x%08X", hr);
+            }
+            ProcessAuthUiEvents();
+        };
+
+        const std::wstring title = state.title.empty() ? L"Microsoft sign-in" : state.title;
+        if (state.showModsPage) {
+            if (state.modsDetailOpen) {
+                const ModCard& card = state.modsDetailCard;
+                const float left = frame.left + 40.0f;
+                const float right = frame.right - 40.0f;
+                const float top = frame.top + 34.0f;
+
+                const float iconSide = 132.0f;
+                const D2D1_RECT_F iconRect = D2D1::RectF(left, top, left + iconSide, top + iconSide);
+                ComPtr<ID2D1Bitmap1> icon = GetCachedBitmap(card.iconPath);
+                if (icon) {
+                    DrawBitmapCover(icon.Get(), iconRect, 1.0f, 1.0f, 0.0f, 0.0f);
+                    StrokeRound(iconRect, softEdge.Get(), 14.0f, 1.0f);
+                } else {
+                    ComPtr<ID2D1SolidColorBrush> ph;
+                    d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x05080B), ph.GetAddressOf());
+                    FillRound(iconRect, ph.Get(), 14.0f);
+                    StrokeRound(iconRect, softEdge.Get(), 14.0f, 1.0f);
+                    DrawIcon(card.isModpack ? L"\uE7B8" : L"\uE74C", iconRect, muted.Get(), true);
+                }
+
+                const float headLeft = iconRect.right + 24.0f;
+                DrawText(card.title.c_str(), titleFormat_.Get(),
+                    D2D1::RectF(headLeft, top, right, top + 48.0f), white.Get());
+                DrawText(card.isModpack ? L"Modpack" : L"Mod", captionFormat_.Get(),
+                    D2D1::RectF(headLeft, top + 50.0f, headLeft + 200.0f, top + 74.0f), accent.Get());
+                const std::wstring metaLine = !state.modsDetailMeta.empty() ? state.modsDetailMeta : card.status;
+                DrawText(metaLine.c_str(), smallFormat_.Get(),
+                    D2D1::RectF(headLeft, top + 76.0f, right, top + 102.0f), muted.Get());
+                DrawText(card.description.c_str(), smallFormat_.Get(),
+                    D2D1::RectF(headLeft, top + 104.0f, right, top + iconSide), muted.Get());
+
+                const float btnW = 240.0f;
+                const float btnH = 54.0f;
+                const bool installing = g_installRunning.load();
+                const D2D1_RECT_F installBtn = D2D1::RectF(right - btnW, iconRect.bottom + 16.0f, right, iconRect.bottom + 16.0f + btnH);
+                if (!installing) GlowSelect(installBtn, 12.0f);
+                FillRound(installBtn, installing ? panel.Get() : accent.Get(), 12.0f);
+                StrokeRound(installBtn, accent.Get(), 12.0f, 2.0f);
+                DrawIcon(installing ? L"\uE895" : L"\uE896", D2D1::RectF(installBtn.left + 18.0f, installBtn.top, installBtn.left + 46.0f, installBtn.bottom), installing ? muted.Get() : black.Get());
+                DrawText(installing ? L"Installing..." : (card.isModpack ? L"Install pack" : L"Install"),
+                    bodyMid_.Get(), D2D1::RectF(installBtn.left + 52.0f, installBtn.top, installBtn.right - 8.0f, installBtn.bottom), installing ? muted.Get() : black.Get());
+
+                DrawIcon(L"\uE72B", D2D1::RectF(left, iconRect.bottom + 26.0f, left + 26.0f, iconRect.bottom + 26.0f + 30.0f), muted.Get());
+                DrawText(L"Back", smallFormat_.Get(),
+                    D2D1::RectF(left + 30.0f, iconRect.bottom + 30.0f, left + 220.0f, iconRect.bottom + 30.0f + 28.0f), muted.Get());
+
+                if (!state.status.empty()) {
+                    DrawText(state.status.c_str(), smallFormat_.Get(),
+                        D2D1::RectF(left, installBtn.bottom + 6.0f, right, installBtn.bottom + 32.0f),
+                        state.isError ? danger.Get() : muted.Get());
+                }
+
+                const float bodyTop = installBtn.bottom + 42.0f;
+                const D2D1_RECT_F bodyRect = D2D1::RectF(left, bodyTop, right, frame.bottom - 30.0f);
+                FillRound(bodyRect, surfaceFill.Get(), 16.0f);
+                StrokeRound(bodyRect, softEdge.Get(), 16.0f, 1.0f);
+                const float padb = 16.0f;
+                const D2D1_RECT_F bodyInner = D2D1::RectF(bodyRect.left + padb, bodyRect.top + padb, bodyRect.right - padb, bodyRect.bottom - padb);
+                const float lineStep = 34.0f;
+                const float scrollPx = static_cast<float>(state.modsDetailScroll) * lineStep;
+
+                const std::wstring bodyText = (state.modsDetailLoading || state.modsDetailBody.empty())
+                    ? std::wstring(L"Loading description...")
+                    : state.modsDetailBody;
+                ComPtr<IDWriteTextLayout> layout;
+                if (SUCCEEDED(dwriteFactory_->CreateTextLayout(
+                        bodyText.c_str(), static_cast<UINT32>(bodyText.size()), smallFormat_.Get(),
+                        bodyInner.right - bodyInner.left, 100000.0f, layout.GetAddressOf()))) {
+                    if (!state.modsDetailLoading && !state.modsDetailBody.empty()) {
+                        for (const auto& b : state.modsDetailBold) {
+                            layout->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_RANGE{ b.first, b.second });
+                            layout->SetDrawingEffect(white.Get(), DWRITE_TEXT_RANGE{ b.first, b.second });
+                        }
+                        for (const auto& hh : state.modsDetailHead) {
+                            layout->SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_RANGE{ hh.first, hh.second });
+                            layout->SetFontSize(27.0f, DWRITE_TEXT_RANGE{ hh.first, hh.second });
+                            layout->SetDrawingEffect(white.Get(), DWRITE_TEXT_RANGE{ hh.first, hh.second });
+                        }
+                    }
+                    DWRITE_TEXT_METRICS tm{};
+                    const float viewH = bodyInner.bottom - bodyInner.top;
+                    if (SUCCEEDED(layout->GetMetrics(&tm))) {
+                        const int maxScroll = tm.height > viewH ? static_cast<int>(ceilf((tm.height - viewH) / lineStep)) : 0;
+                        g_detailMaxScroll.store(maxScroll);
+                    }
+                    d2dContext_->PushAxisAlignedClip(bodyInner, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                    d2dContext_->DrawTextLayout(D2D1::Point2F(bodyInner.left, bodyInner.top - scrollPx), layout.Get(), muted.Get());
+                    d2dContext_->PopAxisAlignedClip();
+                }
+
+                finishDraw();
+                return;
+            }
+            if (state.modsProfileOpen) {
+                const float left = frame.left + 40.0f;
+                const float right = frame.right - 40.0f;
+                const float top = frame.top + 34.0f;
+                const bool isActive = !state.modsProfileId.empty() && state.modsProfileId == state.activeProfileId;
+
+                const std::wstring nameShown = state.modsRenaming ? (state.modsRenameText + L"_") : state.modsProfileName;
+                DrawText(nameShown.c_str(), titleFormat_.Get(),
+                    D2D1::RectF(left, top, right - 380.0f, top + 48.0f), state.modsRenaming ? accent.Get() : white.Get());
+                const std::wstring sub = state.modsProfileBuiltin
+                    ? (state.modsProfileTargetText + L" - Pure vanilla, always available")
+                    : (state.modsProfileTargetText + L" - " + std::to_wstring(state.modsProfileMods.size()) +
+                        (state.modsProfileMods.size() == 1 ? L" mod installed" : L" mods installed"));
+                DrawText(sub.c_str(), captionFormat_.Get(),
+                    D2D1::RectF(left, top + 50.0f, right - 380.0f, top + 74.0f), muted.Get());
+
+                const float btnW = 168.0f;
+                const float btnH = 54.0f;
+                const D2D1_RECT_F playBtn = D2D1::RectF(right - btnW, top, right, top + btnH);
+                const bool playFocus = state.modsProfileFocus == 0;
+                if (playFocus) GlowSelect(playBtn, 12.0f);
+                FillRound(playBtn, isActive ? panel.Get() : accent.Get(), 12.0f);
+                StrokeRound(playBtn, accent.Get(), 12.0f, playFocus ? 3.0f : 2.0f);
+                DrawIcon(L"\uE768", D2D1::RectF(playBtn.left + 16.0f, playBtn.top, playBtn.left + 44.0f, playBtn.bottom), isActive ? muted.Get() : black.Get());
+                DrawText(isActive ? L"Playing" : L"Play this", bodyMid_.Get(),
+                    D2D1::RectF(playBtn.left + 50.0f, playBtn.top, playBtn.right - 8.0f, playBtn.bottom), isActive ? muted.Get() : black.Get());
+
+                if (!state.modsProfileBuiltin) {
+                    const D2D1_RECT_F backupBtn = D2D1::RectF(right - btnW * 2.0f - 16.0f, top, right - btnW - 16.0f, top + btnH);
+                    const bool backupFocus = state.modsProfileFocus == 3;
+                    if (backupFocus) GlowSelect(backupBtn, 12.0f);
+                    FillRound(backupBtn, surfaceFill.Get(), 12.0f);
+                    StrokeRound(backupBtn, accent.Get(), 12.0f, backupFocus ? 3.0f : 2.0f);
+                    DrawIcon(L"\uE74E", D2D1::RectF(backupBtn.left + 16.0f, backupBtn.top, backupBtn.left + 44.0f, backupBtn.bottom), accent.Get());
+                    DrawText(L"Backup", bodyMid_.Get(),
+                        D2D1::RectF(backupBtn.left + 50.0f, backupBtn.top, backupBtn.right - 8.0f, backupBtn.bottom), accent.Get());
+
+                    const D2D1_RECT_F delBtn = D2D1::RectF(right - btnW * 3.0f - 32.0f, top, right - btnW * 2.0f - 32.0f, top + btnH);
+                    const bool delFocus = state.modsProfileFocus == 1;
+                    if (delFocus) GlowSelect(delBtn, 12.0f);
+                    FillRound(delBtn, surfaceFill.Get(), 12.0f);
+                    StrokeRound(delBtn, danger.Get(), 12.0f, delFocus ? 3.0f : 2.0f);
+                    DrawIcon(L"\uE74D", D2D1::RectF(delBtn.left + 16.0f, delBtn.top, delBtn.left + 44.0f, delBtn.bottom), danger.Get());
+                    DrawText(L"Delete", bodyMid_.Get(),
+                        D2D1::RectF(delBtn.left + 50.0f, delBtn.top, delBtn.right - 8.0f, delBtn.bottom), danger.Get());
+                }
+
+                const bool gridFocus = state.modsProfileFocus == 2;
+                DrawText(state.modsRenaming
+                            ? L"Type a name, then close the keyboard to save"
+                            : (state.modsProfileBuiltin
+                                ? L"B  Back"
+                                : (gridFocus ? L"B  Back      X  Remove mod      Y  Rename"
+                                             : L"B  Back      A select      X Delete      Y Rename")),
+                    smallFormat_.Get(),
+                    D2D1::RectF(left, top + btnH + 12.0f, right, top + btnH + 40.0f),
+                    state.modsRenaming ? accent.Get() : muted.Get());
+
+                if (!state.status.empty()) {
+                    DrawText(state.status.c_str(), smallFormat_.Get(),
+                        D2D1::RectF(left, top + btnH + 42.0f, right, top + btnH + 68.0f),
+                        state.isError ? danger.Get() : accent.Get());
+                }
+
+                const float bodyTop = top + btnH + 78.0f;
+                const D2D1_RECT_F bodyRect = D2D1::RectF(left, bodyTop, right, frame.bottom - 30.0f);
+                FillRound(bodyRect, surfaceFill.Get(), 16.0f);
+                StrokeRound(bodyRect, softEdge.Get(), 16.0f, 1.0f);
+                const float padb = 16.0f;
+                const D2D1_RECT_F bodyInner = D2D1::RectF(bodyRect.left + padb, bodyRect.top + padb, bodyRect.right - padb, bodyRect.bottom - padb);
+                const int total = static_cast<int>(state.modsProfileMods.size());
+
+                if (total == 0) {
+                    g_profileMaxScroll.store(0);
+                    g_profileRowsVisible.store(1);
+                    DrawText(state.modsProfileBuiltin ? L"No mods. This is the clean vanilla game."
+                                                      : L"No mods yet. Set this profile active, then install mods from the other tabs.",
+                        smallFormat_.Get(), D2D1::RectF(bodyInner.left, bodyInner.top, bodyInner.right, bodyInner.top + 28.0f), muted.Get());
+                } else {
+                    const float colGap = 14.0f;
+                    const float cardGap = 12.0f;
+                    const float cardW = (bodyInner.right - bodyInner.left - colGap) * 0.5f;
+                    const float cardH = 58.0f;
+                    const float gridH = bodyInner.bottom - bodyInner.top;
+                    const int rowsVisible = (std::max)(1, static_cast<int>((gridH + cardGap) / (cardH + cardGap)));
+                    g_profileRowsVisible.store(rowsVisible);
+                    const int totalRows = (total + 1) / 2;
+                    const int maxScroll = (std::max)(0, totalRows - rowsVisible);
+                    g_profileMaxScroll.store(maxScroll);
+                    const int scroll = (std::min)((std::max)(0, state.modsProfileScroll), maxScroll);
+
+                    d2dContext_->PushAxisAlignedClip(bodyInner, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                    for (int row = scroll; row < scroll + rowsVisible && row < totalRows; ++row) {
+                        for (int col = 0; col < 2; ++col) {
+                            const int i = row * 2 + col;
+                            if (i >= total) break;
+                            const float x = bodyInner.left + col * (cardW + colGap);
+                            const float y = bodyInner.top + (row - scroll) * (cardH + cardGap);
+                            const D2D1_RECT_F card = D2D1::RectF(x, y, x + cardW, y + cardH);
+                            const bool sel = gridFocus && i == state.modsProfileSel;
+                            if (sel) GlowSelect(card, 12.0f);
+                            FillRound(card, panel.Get(), 12.0f);
+                            StrokeRound(card, sel ? accent.Get() : softEdge.Get(), 12.0f, sel ? 3.0f : 1.0f);
+                            DrawIcon(L"\uE74C", D2D1::RectF(card.left + 10.0f, card.top, card.left + 44.0f, card.bottom), sel ? accent.Get() : muted.Get());
+                            std::wstring nm = state.modsProfileMods[static_cast<size_t>(i)];
+                            if (nm.size() > 4 && nm.compare(nm.size() - 4, 4, L".jar") == 0) nm = nm.substr(0, nm.size() - 4);
+                            DrawText(nm.c_str(), smallMid_.Get(),
+                                D2D1::RectF(card.left + 48.0f, card.top, card.right - 12.0f, card.bottom), white.Get());
+                        }
+                    }
+                    d2dContext_->PopAxisAlignedClip();
+
+                    if (maxScroll > 0) {
+                        const std::wstring pos = L"row " + std::to_wstring(scroll + 1) + L" / " + std::to_wstring(totalRows);
+                        DrawText(pos.c_str(), smallFormat_.Get(),
+                            D2D1::RectF(bodyRect.right - 140.0f, bodyRect.top - 26.0f, bodyRect.right, bodyRect.top), muted.Get());
+                    }
+                }
+
+                finishDraw();
+                return;
+            }
+            const float left = frame.left + 36.0f;
+            const float tabsRight = frame.left + (frame.right - frame.left) * 0.22f;
+            const float cardsLeft = tabsRight + 34.0f;
+            const float cardsRight = frame.right - 36.0f;
+            const float top = frame.top + 34.0f;
+            const float buttonH = 58.0f;
+            const float buttonGap = 22.0f;
+            const wchar_t* tabs[] = { L"Profiles", L"Popular", L"Latest", L"Recommended", L"Modpacks" };
+
+            DrawText(L"Mods", titleFormat_.Get(), D2D1::RectF(left, top, tabsRight, top + 48.0f), white.Get());
+
+            const wchar_t* tabIcons[] = { L"\uE8B7", L"\uE735", L"\uE823", L"\uEB52", L"\uE7B8" };
+            for (int i = 0; i < 5; ++i) {
+                const float y = top + 76.0f + i * (buttonH + buttonGap);
+                const D2D1_RECT_F tab = D2D1::RectF(left, y, tabsRight, y + buttonH);
+                const bool selected = i == state.selectedModsTab && state.modsFocus == 0;
+                const bool active = i == state.selectedModsTab;
+                if (selected) GlowSelect(tab, 14.0f);
+                FillRound(tab, active ? accentSoft.Get() : surfaceFill.Get(), 14.0f);
+                StrokeRound(tab, (selected || active) ? accent.Get() : softEdge.Get(), 14.0f, selected ? 3.0f : (active ? 2.0f : 1.0f));
+                DrawIcon(tabIcons[i], D2D1::RectF(tab.left + 8.0f, tab.top, tab.left + 46.0f, tab.bottom), active ? accent.Get() : muted.Get());
+                DrawText(tabs[i], bodyMid_.Get(),
+                    D2D1::RectF(tab.left + 52.0f, tab.top, tab.right - 10.0f, tab.bottom),
+                    active ? accent.Get() : white.Get());
+            }
+
+            {
+                const float infoY = top + 76.0f + 5 * (buttonH + buttonGap) + 8.0f;
+                const D2D1_RECT_F infoBox = D2D1::RectF(left, infoY, tabsRight, infoY + 74.0f);
+                FillRound(infoBox, surfaceFill.Get(), 12.0f);
+                StrokeRound(infoBox, softEdge.Get(), 12.0f, 1.0f);
+                DrawIcon(L"\uE768", D2D1::RectF(infoBox.left + 8.0f, infoBox.top + 6.0f, infoBox.left + 34.0f, infoBox.top + 30.0f), muted.Get());
+                DrawText(L"INSTALLS GO TO", captionFormat_.Get(),
+                    D2D1::RectF(infoBox.left + 36.0f, infoBox.top + 9.0f, infoBox.right - 8.0f, infoBox.top + 30.0f), muted.Get());
+                const std::wstring who = state.activeProfileName.empty() ? std::wstring(L"Vanilla") : state.activeProfileName;
+                DrawText(who.c_str(), bodyFormat_.Get(),
+                    D2D1::RectF(infoBox.left + 12.0f, infoBox.top + 32.0f, infoBox.right - 8.0f, infoBox.bottom - 6.0f), accent.Get());
+            }
+
+            if (!state.status.empty()) {
+                DrawText(state.status.c_str(), smallFormat_.Get(),
+                    D2D1::RectF(left, frame.bottom - 112.0f, tabsRight, frame.bottom - 30.0f),
+                    state.isError ? danger.Get() : muted.Get());
+            }
+
+            const D2D1_RECT_F list = D2D1::RectF(cardsLeft, top, cardsRight, frame.bottom - 34.0f);
+            FillRound(list, surfaceFill.Get(), 16.0f);
+            StrokeRound(list, softEdge.Get(), 16.0f, 1.0f);
+
+            const float pad = 16.0f;
+            const D2D1_RECT_F inner = D2D1::RectF(list.left + pad, list.top + pad, list.right - pad, list.bottom - pad);
+
+            const float searchH = 46.0f;
+            const D2D1_RECT_F targetBox = D2D1::RectF(inner.left, inner.top, inner.right, inner.top + searchH);
+            const bool targetFocused = state.modsFocus == 3;
+            if (targetFocused) GlowSelect(targetBox, 12.0f);
+            FillRound(targetBox, targetFocused ? accentSoft.Get() : panel.Get(), 12.0f);
+            StrokeRound(targetBox, targetFocused ? accent.Get() : softEdge.Get(), 12.0f, targetFocused ? 3.0f : 1.0f);
+            DrawIcon(L"\uE8EC", D2D1::RectF(targetBox.left + 8.0f, targetBox.top, targetBox.left + 40.0f, targetBox.bottom), targetFocused ? accent.Get() : muted.Get());
+            {
+                const std::wstring targetText = L"Target: " + TargetProfileText(CurrentModsTarget(state));
+                DrawText(targetText.c_str(), smallMid_.Get(),
+                    D2D1::RectF(targetBox.left + 44.0f, targetBox.top, targetBox.right - 48.0f, targetBox.bottom),
+                    white.Get());
+                DrawText(state.modsTargetOpen ? L"\uE70E" : L"\uE70D", iconFormat_.Get(),
+                    D2D1::RectF(targetBox.right - 42.0f, targetBox.top, targetBox.right - 10.0f, targetBox.bottom),
+                    targetFocused ? accent.Get() : muted.Get());
+            }
+
+            const D2D1_RECT_F search = D2D1::RectF(inner.left, targetBox.bottom + 10.0f, inner.right, targetBox.bottom + 10.0f + searchH);
+            const bool searchFocused = state.modsFocus == 1;
+            if (searchFocused) GlowSelect(search, 12.0f);
+            FillRound(search, searchFocused ? accentSoft.Get() : panel.Get(), 12.0f);
+            StrokeRound(search, searchFocused ? accent.Get() : softEdge.Get(), 12.0f, searchFocused ? 3.0f : 1.0f);
+            DrawIcon(L"\uE721", D2D1::RectF(search.left + 8.0f, search.top, search.left + 40.0f, search.bottom), searchFocused ? accent.Get() : muted.Get());
+            {
+                const bool placeholder = state.modsSearchQuery.empty() && !state.modsSearchEditing;
+                const wchar_t* hint = state.selectedModsTab == 4 ? L"Search modpacks" : L"Search mods";
+                std::wstring shown = placeholder ? std::wstring(hint) : state.modsSearchQuery;
+                if (state.modsSearchEditing) shown += L"_";
+                DrawText(shown.c_str(), smallMid_.Get(),
+                    D2D1::RectF(search.left + 44.0f, search.top, search.right - 12.0f, search.bottom),
+                    placeholder ? muted.Get() : white.Get());
+            }
+
+            const float gridTop = search.bottom + 16.0f;
+            const float colGap = 16.0f;
+            const float cardGap = 16.0f;
+            const float cardW = (inner.right - inner.left - colGap) * 0.5f;
+            const float gridH = inner.bottom - gridTop;
+            const float desiredCardH = 150.0f;
+            int rowsVisible = static_cast<int>((gridH + cardGap) / (desiredCardH + cardGap) + 0.5f);
+            if (rowsVisible < 1) rowsVisible = 1;
+            const float cardH = (gridH - cardGap * (rowsVisible - 1)) / static_cast<float>(rowsVisible);
+            g_modsRowsVisible.store(rowsVisible);
+
+            const int count = static_cast<int>(state.modsCards.size());
+            const int totalRows = (count + 1) / 2;
+            const int maxScroll = totalRows > rowsVisible ? totalRows - rowsVisible : 0;
+            int scroll = state.modsScrollRow;
+            if (scroll < 0) scroll = 0;
+            if (scroll > maxScroll) scroll = maxScroll;
+
+            for (int row = scroll; row < scroll + rowsVisible && row < totalRows; ++row) {
+                for (int col = 0; col < 2; ++col) {
+                    const int i = row * 2 + col;
+                    if (i >= count) break;
+                    const float x = inner.left + col * (cardW + colGap);
+                    const float y = gridTop + (row - scroll) * (cardH + cardGap);
+                    const D2D1_RECT_F card = D2D1::RectF(x, y, x + cardW, y + cardH);
+                    const bool selected = state.modsFocus == 2 && i == state.selectedModIndex;
+
+                    if (selected) GlowSelect(card, 14.0f);
+                    FillRound(card, panel.Get(), 14.0f);
+                    StrokeRound(card, selected ? accent.Get() : softEdge.Get(), 14.0f, selected ? 3.0f : 1.0f);
+
+                    const float imageSide = (std::min)(cardH - 24.0f, 112.0f);
+                    const float imageTop = card.top + (cardH - imageSide) * 0.5f;
+                    const D2D1_RECT_F imageRect = D2D1::RectF(card.left + 14.0f, imageTop, card.left + 14.0f + imageSide, imageTop + imageSide);
+                    ComPtr<ID2D1Bitmap1> icon = GetCachedBitmap(state.modsCards[i].iconPath);
+                    if (icon) {
+                        DrawBitmapCover(icon.Get(), imageRect, 1.0f, 1.0f, 0.0f, 0.0f);
+                        StrokeRound(imageRect, softEdge.Get(), 8.0f, 1.0f);
+                    } else {
+                        ComPtr<ID2D1SolidColorBrush> ph;
+                        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x05080B), ph.GetAddressOf());
+                        FillRound(imageRect, ph.Get(), 8.0f);
+                        StrokeRound(imageRect, softEdge.Get(), 8.0f, 1.0f);
+                        const wchar_t* g = state.selectedModsTab == 0
+                            ? (state.modsCards[i].projectId == L"__new__" ? L"\uE710" : L"\uE8B7")
+                            : (state.modsCards[i].isModpack ? L"\uE7B8" : L"\uE74C");
+                        DrawIcon(g, imageRect, muted.Get(), true);
+                    }
+
+                    const float textLeft = imageRect.right + 16.0f;
+                    const float textRight = card.right - 14.0f;
+                    DrawText(state.modsCards[i].title.c_str(), cardTitleFormat_.Get(),
+                        D2D1::RectF(textLeft, card.top + 12.0f, textRight, card.top + 44.0f),
+                        white.Get());
+                    DrawText(state.modsCards[i].description.c_str(), captionFormat_.Get(),
+                        D2D1::RectF(textLeft, card.top + 44.0f, textRight, card.bottom - 40.0f),
+                        muted.Get());
+                    if (!state.modsCards[i].status.empty()) {
+                        DrawText(state.modsCards[i].status.c_str(), smallMid_.Get(),
+                            D2D1::RectF(textLeft, card.bottom - 40.0f, textRight, card.bottom - 6.0f),
+                            state.modsCards[i].installed ? accent.Get() : muted.Get());
+                    }
+                }
+            }
+
+            if (maxScroll > 0) {
+                const D2D1_RECT_F track = D2D1::RectF(inner.right - 6.0f, gridTop, inner.right - 2.0f, inner.bottom);
+                FillRound(track, panel.Get(), 2.0f);
+                const float trackH = track.bottom - track.top;
+                const float thumbH = trackH * (static_cast<float>(rowsVisible) / static_cast<float>(totalRows));
+                const float thumbY = track.top + (trackH - thumbH) * (static_cast<float>(scroll) / static_cast<float>(maxScroll));
+                FillRound(D2D1::RectF(track.left, thumbY, track.right, thumbY + thumbH), accent.Get(), 2.0f);
+            }
+
+            if (state.modsCards.empty()) {
+                const std::wstring emptyText = state.selectedModsTab == 0
+                    ? L"No installed mods"
+                    : (state.selectedModsTab == 4 ? L"No modpacks found" : L"No mods found");
+                DrawText(emptyText.c_str(), bodyFormat_.Get(),
+                    D2D1::RectF(inner.left + 8.0f, gridTop + 8.0f, inner.right - 8.0f, gridTop + 70.0f),
+                    muted.Get());
+            }
+
+            if (state.modsTargetOpen && !state.modsTargets.empty()) {
+                const float rowH = 40.0f;
+                const int n = static_cast<int>(state.modsTargets.size());
+                const float dropTop = targetBox.bottom + 4.0f;
+                const D2D1_RECT_F drop = D2D1::RectF(targetBox.left, dropTop, targetBox.right, dropTop + rowH * n + 12.0f);
+                FillRound(drop, surfaceFill.Get(), 12.0f);
+                StrokeRound(drop, accent.Get(), 12.0f, 2.0f);
+                for (int i = 0; i < n; ++i) {
+                    const float ry = dropTop + 6.0f + i * rowH;
+                    const D2D1_RECT_F row = D2D1::RectF(drop.left + 6.0f, ry, drop.right - 6.0f, ry + rowH - 4.0f);
+                    const bool rowSel = i == state.modsTargetSel;
+                    const bool rowActive = state.modsTargets[static_cast<size_t>(i)].targetId == state.modsBrowseTargetId;
+                    if (rowSel) FillRound(row, accentSoft.Get(), 8.0f);
+                    DrawText(TargetProfileText(state.modsTargets[static_cast<size_t>(i)]).c_str(), smallMid_.Get(),
+                        D2D1::RectF(row.left + 14.0f, row.top, row.right - 32.0f, row.bottom),
+                        rowSel ? accent.Get() : white.Get());
+                    if (rowActive) {
+                        DrawText(L"\uE73E", iconFormat_.Get(),
+                            D2D1::RectF(row.right - 30.0f, row.top, row.right - 6.0f, row.bottom),
+                            accent.Get());
+                    }
+                }
+            }
+
+            finishDraw();
+            return;
+        }
+
+        if (state.showMainMenu) {
+            const float left = frame.left + 36.0f;
+            const float menuRight = frame.left + (frame.right - frame.left) * 0.34f;
+            const float previewLeft = menuRight + 34.0f;
+            const float previewRight = frame.right - 36.0f;
+            const float top = frame.top + 34.0f;
+            const float buttonH = 62.0f;
+            const float buttonGap = 24.0f;
+            const wchar_t* labels[] = { L"Play", L"Mods", L"Remote Files", L"Repair downloads", L"Sign out" };
+
+            DrawText(title.c_str(), titleFormat_.Get(), D2D1::RectF(left, top, menuRight, top + 48.0f), white.Get());
+
+            const wchar_t* menuIcons[] = { L"\uE768", L"\uE74C", L"\uE838", L"\uE72C", L"\uE7E8" };
+            for (int i = 0; i < 5; ++i) {
+                const float y = top + 76.0f + i * (buttonH + buttonGap);
+                const D2D1_RECT_F button = D2D1::RectF(left, y, menuRight, y + buttonH);
+                const bool sel = i == state.selectedMenuIndex;
+                if (sel) GlowSelect(button, 14.0f);
+                FillRound(button, sel ? accentSoft.Get() : surfaceFill.Get(), 14.0f);
+                StrokeRound(button, sel ? accent.Get() : softEdge.Get(), 14.0f, sel ? 3.0f : 1.0f);
+                DrawIcon(menuIcons[i], D2D1::RectF(button.left + 16.0f, button.top, button.left + 50.0f, button.bottom), sel ? accent.Get() : white.Get());
+                const D2D1_RECT_F textRect = D2D1::RectF(button.left + 56.0f, button.top, button.right - 12.0f, button.bottom);
+                DrawText(labels[i], bodyMid_.Get(), textRect, sel ? accent.Get() : white.Get());
+            }
+
+            if (!state.status.empty()) {
+                const D2D1_RECT_F statusRect = D2D1::RectF(left, frame.bottom - 88.0f, menuRight, frame.bottom - 28.0f);
+                DrawText(state.status.c_str(), smallFormat_.Get(), statusRect, state.isError ? danger.Get() : muted.Get());
+            }
+
+            const D2D1_RECT_F preview = D2D1::RectF(previewLeft, top, previewRight, frame.bottom - 34.0f);
+            FillRound(preview, black.Get(), 16.0f);
+            StrokeRound(preview, softEdge.Get(), 16.0f, 1.0f);
+            const float inset = 8.0f;
+            const D2D1_RECT_F pano = D2D1::RectF(preview.left + inset, preview.top + inset, preview.right - inset, preview.bottom - inset);
+            DrawScreenshots(pano);
+
+            if (!state.detail.empty()) {
+                const D2D1_RECT_F detailRect = D2D1::RectF(preview.left + 26.0f, preview.bottom - 82.0f, preview.right - 26.0f, preview.bottom - 24.0f);
+                DrawText(state.detail.c_str(), smallFormat_.Get(), detailRect, muted.Get());
+            }
+
+            finishDraw();
+            return;
+        }
+
+        if (state.showRemoteFiles) {
+            const float left = frame.left + 54.0f;
+            const float right = frame.right - 54.0f;
+            const float top = frame.top + 58.0f;
+            DrawText(L"Remote Files", titleFormat_.Get(), D2D1::RectF(left, top, right, top + 58.0f), white.Get());
+            DrawText(state.status.c_str(), bodyFormat_.Get(), D2D1::RectF(left, top + 86.0f, right, top + 128.0f), accent.Get());
+
+            const D2D1_RECT_F box = D2D1::RectF(left, top + 152.0f, right, top + 336.0f);
+            FillRound(box, surfaceFill.Get(), 14.0f);
+            StrokeRound(box, softEdge.Get(), 14.0f, 1.0f);
+            DrawText(state.detail.c_str(), bodyMid_.Get(), D2D1::RectF(box.left + 24.0f, box.top + 20.0f, box.right - 24.0f, box.top + 92.0f), white.Get());
+            DrawText(
+                L"Download logs and crash reports from another device on the same network.\nUpload .jar mods or .zip resource packs to the active profile.",
+                smallFormat_.Get(),
+                D2D1::RectF(box.left + 24.0f, box.top + 104.0f, box.right - 24.0f, box.bottom - 22.0f),
+                muted.Get());
+
+            const D2D1_RECT_F hint = D2D1::RectF(left, frame.bottom - 92.0f, right, frame.bottom - 36.0f);
+            DrawText(L"Press B or Escape to stop sharing and return to the launcher.", smallFormat_.Get(), hint, muted.Get());
+            finishDraw();
+            return;
+        }
+
+        if (!state.showDeviceCode) {
+            const float left = frame.left + 54.0f;
+            const float right = frame.right - 54.0f;
+            const D2D1_RECT_F titleRect = D2D1::RectF(left, frame.top + 72.0f, right, frame.top + 130.0f);
+            DrawText(title.c_str(), titleFormat_.Get(), titleRect, white.Get());
+
+            const D2D1_RECT_F statusRect = D2D1::RectF(left, frame.top + 178.0f, right, frame.top + 240.0f);
+            DrawText(state.status.c_str(), bodyFormat_.Get(), statusRect, state.isError ? danger.Get() : white.Get());
+
+            if (!state.detail.empty()) {
+                const D2D1_RECT_F detailRect = D2D1::RectF(left, frame.top + 248.0f, right, frame.top + 306.0f);
+                DrawText(state.detail.c_str(), smallFormat_.Get(), detailRect, muted.Get());
+            }
+
+            if (state.showLaunchLog) {
+                const float logTop = frame.top + 326.0f;
+                const float logBottom = frame.bottom - 158.0f;
+                const D2D1_RECT_F logBox = D2D1::RectF(left, logTop, right, logBottom);
+                FillRound(logBox, surfaceFill.Get(), 14.0f);
+                StrokeRound(logBox, softEdge.Get(), 14.0f, 1.0f);
+                DrawText(L"Live launch log", captionFormat_.Get(),
+                    D2D1::RectF(logBox.left + 18.0f, logBox.top + 12.0f, logBox.right - 18.0f, logBox.top + 40.0f),
+                    accent.Get());
+                const D2D1_RECT_F logTextRect = D2D1::RectF(logBox.left + 18.0f, logBox.top + 46.0f, logBox.right - 18.0f, logBox.bottom - 16.0f);
+                d2dContext_->PushAxisAlignedClip(logTextRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                DrawText(state.launchLogText.empty() ? L"Waiting for pre-launch log output..." : state.launchLogText.c_str(),
+                    smallFormat_.Get(), logTextRect, muted.Get());
+                d2dContext_->PopAxisAlignedClip();
+            }
+
+            if (state.progress >= 0.0f) {
+                const float progress = (std::max)(0.0f, (std::min)(1.0f, state.progress));
+                const float barTop = frame.bottom - 130.0f;
+                const float barHeight = 18.0f;
+                const D2D1_RECT_F track = D2D1::RectF(left, barTop, right, barTop + barHeight);
+                const D2D1_RECT_F fill = D2D1::RectF(left, barTop, left + (right - left) * progress, barTop + barHeight);
+                FillRound(track, panel.Get(), 9.0f);
+                FillRound(fill, state.isError ? danger.Get() : accent.Get(), 9.0f);
+
+                wchar_t percent[32] = {};
+                swprintf_s(percent, L"%d%%", static_cast<int>(progress * 100.0f + 0.5f));
+                const D2D1_RECT_F percentRect = D2D1::RectF(left, barTop + 28.0f, left + 140.0f, barTop + 68.0f);
+                DrawText(percent, smallFormat_.Get(), percentRect, muted.Get());
+            }
+
+            finishDraw();
+            return;
+        }
+
+        const float dividerX = frame.left + (frame.right - frame.left) * 0.52f;
+        d2dContext_->DrawLine(
+            D2D1::Point2F(dividerX, frame.top + 32.0f),
+            D2D1::Point2F(dividerX, frame.bottom - 32.0f),
+            softEdge.Get(),
+            1.5f);
+
+        const D2D1_RECT_F titleRect = D2D1::RectF(frame.left + 42.0f, frame.top + 34.0f, dividerX - 42.0f, frame.top + 86.0f);
+        DrawText(title.c_str(), titleFormat_.Get(), titleRect, white.Get());
+
+        const D2D1_RECT_F codeBox = D2D1::RectF(frame.left + 42.0f, frame.top + 102.0f, dividerX - 42.0f, frame.top + 190.0f);
+        FillRound(codeBox, accentSoft.Get(), 14.0f);
+        StrokeRound(codeBox, accent.Get(), 14.0f, 2.0f);
+        if (!state.userCode.empty()) {
+            DrawText(state.userCode.c_str(), codeFormat_.Get(), codeBox, white.Get());
+        }
+
+        std::wstring instruction = L"Enter this code at";
+        std::wstring url = state.verificationUri.empty() ? L"microsoft.com/link" : state.verificationUri;
+        const D2D1_RECT_F bodyRect = D2D1::RectF(frame.left + 46.0f, frame.top + 218.0f, dividerX - 48.0f, frame.top + 326.0f);
+        DrawText((instruction + L"\n" + url).c_str(), bodyFormat_.Get(), bodyRect, white.Get());
+
+        std::wstring status = state.status;
+        if (state.secondsRemaining > 0) {
+            status += L"\nCode expires in " + std::to_wstring(state.secondsRemaining) + L" seconds";
+        }
+        const D2D1_RECT_F statusRect = D2D1::RectF(frame.left + 46.0f, frame.bottom - 116.0f, dividerX - 48.0f, frame.bottom - 38.0f);
+        DrawText(status.c_str(), smallFormat_.Get(), statusRect, state.isError ? danger.Get() : muted.Get());
+
+        if (!state.detail.empty()) {
+            const D2D1_RECT_F detailRect = D2D1::RectF(frame.left + 46.0f, frame.bottom - 160.0f, dividerX - 48.0f, frame.bottom - 118.0f);
+            DrawText(state.detail.c_str(), smallFormat_.Get(), detailRect, muted.Get());
+        }
+
+        const float qrSide = (std::min)((frame.right - dividerX) * 0.55f, (frame.bottom - frame.top) * 0.58f);
+        const float qrLeft = dividerX + ((frame.right - dividerX) - qrSide) * 0.5f;
+        const float qrTop = frame.top + ((frame.bottom - frame.top) - qrSide) * 0.43f;
+        const D2D1_RECT_F qrRect = D2D1::RectF(qrLeft, qrTop, qrLeft + qrSide, qrTop + qrSide);
+        DrawQr(state.qr, qrRect, white.Get(), black.Get(), muted.Get());
+
+        const D2D1_RECT_F qrLabel = D2D1::RectF(qrLeft, qrRect.bottom + 18.0f, qrLeft + qrSide, qrRect.bottom + 54.0f);
+        DrawText(L"Scan QR", smallFormat_.Get(), qrLabel, muted.Get());
+
+        finishDraw();
+    }
+
+private:
+    ComPtr<ICoreWindow> window_;
+    ComPtr<ID3D11Device> d3dDevice_;
+    ComPtr<ID3D11DeviceContext> d3dContext_;
+    ComPtr<IDXGISwapChain1> swapChain_;
+    ComPtr<ID2D1Factory1> d2dFactory_;
+    ComPtr<ID2D1Device> d2dDevice_;
+    ComPtr<ID2D1DeviceContext> d2dContext_;
+    ComPtr<ID2D1Bitmap1> targetBitmap_;
+    ComPtr<IDWriteFactory> dwriteFactory_;
+    ComPtr<IWICImagingFactory> wicFactory_;
+    ComPtr<IDWriteTextFormat> codeFormat_;
+    ComPtr<IDWriteTextFormat> bodyFormat_;
+    ComPtr<IDWriteTextFormat> smallFormat_;
+    ComPtr<IDWriteTextFormat> cardTitleFormat_;
+    ComPtr<IDWriteTextFormat> titleFormat_;
+    ComPtr<IDWriteTextFormat> captionFormat_;
+    ComPtr<IDWriteTextFormat> bodyMid_;
+    ComPtr<IDWriteTextFormat> smallMid_;
+    ComPtr<IDWriteTextFormat> iconFormat_;
+    ComPtr<IDWriteTextFormat> iconLgFormat_;
+    std::map<std::wstring, ComPtr<ID2D1Bitmap1>> bitmapCache_;
+    std::vector<std::wstring> screenshotPaths_;
+    ULONGLONG screenshotsScanTick_ = 0;
+    float width_ = 1280.0f;
+    float height_ = 720.0f;
+
+    void CreateTextFormats() {
+        if (!dwriteFactory_) return;
+        dwriteFactory_->CreateTextFormat(
+            L"Consolas", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 48.0f, L"en-US", codeFormat_.GetAddressOf());
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 30.0f, L"en-US", bodyFormat_.GetAddressOf());
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 21.0f, L"en-US", smallFormat_.GetAddressOf());
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 22.0f, L"en-US", cardTitleFormat_.GetAddressOf());
+
+        if (codeFormat_) {
+            codeFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            codeFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+        if (bodyFormat_) {
+            bodyFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            bodyFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        }
+        if (smallFormat_) {
+            smallFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            smallFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        }
+        if (cardTitleFormat_) {
+            cardTitleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            cardTitleFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            cardTitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 40.0f, L"en-US", titleFormat_.GetAddressOf());
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 17.0f, L"en-US", captionFormat_.GetAddressOf());
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe MDL2 Assets", nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 22.0f, L"en-US", iconFormat_.GetAddressOf());
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe MDL2 Assets", nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 32.0f, L"en-US", iconLgFormat_.GetAddressOf());
+        if (titleFormat_) {
+            titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            titleFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            titleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        if (captionFormat_) {
+            captionFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            captionFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        }
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 30.0f, L"en-US", bodyMid_.GetAddressOf());
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 21.0f, L"en-US", smallMid_.GetAddressOf());
+        for (IDWriteTextFormat* mf : { bodyMid_.Get(), smallMid_.Get() }) {
+            if (!mf) continue;
+            mf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            mf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            mf->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        for (IDWriteTextFormat* icf : { iconFormat_.Get(), iconLgFormat_.Get() }) {
+            if (!icf) continue;
+            icf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            icf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            icf->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+    }
+
+    void DrawText(const wchar_t* text, IDWriteTextFormat* format, D2D1_RECT_F rect, ID2D1Brush* brush) {
+        if (!text || !format || !brush) return;
+        d2dContext_->DrawText(
+            text,
+            static_cast<UINT32>(wcslen(text)),
+            format,
+            rect,
+            brush,
+            D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    }
+
+    void FillRound(D2D1_RECT_F r, ID2D1Brush* b, float radius) {
+        if (b) d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(r, radius, radius), b);
+    }
+
+    void StrokeRound(D2D1_RECT_F r, ID2D1Brush* b, float radius, float width) {
+        if (b) d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(r, radius, radius), b, width);
+    }
+
+    void DrawIcon(const wchar_t* glyph, D2D1_RECT_F rect, ID2D1Brush* brush, bool large = false) {
+        DrawText(glyph, large ? iconLgFormat_.Get() : iconFormat_.Get(), rect, brush);
+    }
+
+    void GlowSelect(D2D1_RECT_F r, float radius) {
+        ComPtr<ID2D1SolidColorBrush> g1, g2;
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x70C486, 0.10f), g1.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x70C486, 0.20f), g2.GetAddressOf());
+        if (g1) d2dContext_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(r.left - 10.0f, r.top - 10.0f, r.right + 10.0f, r.bottom + 10.0f), radius + 9.0f, radius + 9.0f), g1.Get());
+        if (g2) d2dContext_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(r.left - 5.0f, r.top - 5.0f, r.right + 5.0f, r.bottom + 5.0f), radius + 5.0f, radius + 5.0f), g2.Get());
+    }
+
+    void FillVerticalGradient(D2D1_RECT_F r, UINT32 topColor, UINT32 bottomColor) {
+        D2D1_GRADIENT_STOP stops[2];
+        stops[0].position = 0.0f; stops[0].color = D2D1::ColorF(topColor);
+        stops[1].position = 1.0f; stops[1].color = D2D1::ColorF(bottomColor);
+        ComPtr<ID2D1GradientStopCollection> coll;
+        if (FAILED(d2dContext_->CreateGradientStopCollection(stops, 2, coll.GetAddressOf()))) return;
+        D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES props{};
+        props.startPoint = D2D1::Point2F(r.left, r.top);
+        props.endPoint = D2D1::Point2F(r.left, r.bottom);
+        ComPtr<ID2D1LinearGradientBrush> br;
+        if (FAILED(d2dContext_->CreateLinearGradientBrush(props, coll.Get(), br.GetAddressOf()))) return;
+        d2dContext_->FillRectangle(r, br.Get());
+    }
+
+    ComPtr<ID2D1Bitmap1> GetCachedBitmap(const std::wstring& path) {
+        if (path.empty()) return nullptr;
+        auto found = bitmapCache_.find(path);
+        if (found != bitmapCache_.end()) {
+            return found->second;
+        }
+
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            return nullptr;
+        }
+
+        ComPtr<ID2D1Bitmap1> bitmap;
+        if (LoadBitmapFromFile(path, bitmap)) {
+            bitmapCache_[path] = bitmap;
+            return bitmap;
+        }
+
+        return nullptr;
+    }
+
+    bool LoadBitmapFromFile(const std::wstring& path, ComPtr<ID2D1Bitmap1>& out) {
+        if (!wicFactory_ || !d2dContext_) return false;
+
+        ComPtr<IWICBitmapDecoder> decoder;
+        HRESULT hr = wicFactory_->CreateDecoderFromFilename(
+            path.c_str(),
+            nullptr,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnLoad,
+            decoder.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Bitmap decoder failed %s hr=0x%08X", path.c_str(), hr);
+            return false;
+        }
+
+        ComPtr<IWICBitmapFrameDecode> frame;
+        hr = decoder->GetFrame(0, frame.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Bitmap frame failed %s hr=0x%08X", path.c_str(), hr);
+            return false;
+        }
+
+        ComPtr<IWICFormatConverter> converter;
+        hr = wicFactory_->CreateFormatConverter(converter.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Bitmap converter create failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = converter->Initialize(
+            frame.Get(),
+            GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom);
+        if (FAILED(hr)) {
+            WriteLogF(L"Bitmap converter init failed %s hr=0x%08X", path.c_str(), hr);
+            return false;
+        }
+
+        const D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_NONE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f,
+            96.0f);
+        hr = d2dContext_->CreateBitmapFromWicBitmap(converter.Get(), &props, out.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Bitmap D2D bitmap failed %s hr=0x%08X", path.c_str(), hr);
+            return false;
+        }
+
+        return true;
+    }
+
+
+    void ScanScreenshots() {
+        screenshotPaths_.clear();
+        const std::wstring dir = GetExecutableDir() + L"\\Assets\\screenshots";
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((dir + L"\\*.png").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                screenshotPaths_.push_back(dir + L"\\" + fd.cFileName);
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        std::sort(screenshotPaths_.begin(), screenshotPaths_.end());
+    }
+
+
+    void DrawBitmapCover(ID2D1Bitmap1* bitmap, D2D1_RECT_F rect, float opacity, float zoom, float panX, float panY) {
+        if (!bitmap) return;
+
+        const D2D1_SIZE_F size = bitmap->GetSize();
+        const float srcW = size.width;
+        const float srcH = size.height;
+        if (srcW <= 0.0f || srcH <= 0.0f) return;
+
+        const float destW = rect.right - rect.left;
+        const float destH = rect.bottom - rect.top;
+        if (destW <= 0.0f || destH <= 0.0f) return;
+
+        const float destAspect = destW / destH;
+        const float srcAspect = srcW / srcH;
+        float cropW = srcW;
+        float cropH = srcH;
+        if (srcAspect > destAspect) {
+            cropW = srcH * destAspect;
+        } else {
+            cropH = srcW / destAspect;
+        }
+
+        zoom = (std::max)(1.0f, zoom);
+        cropW /= zoom;
+        cropH /= zoom;
+
+        const float maxX = (std::max)(0.0f, (srcW - cropW) * 0.5f);
+        const float maxY = (std::max)(0.0f, (srcH - cropH) * 0.5f);
+        const float centerX = srcW * 0.5f + maxX * (std::max)(-1.0f, (std::min)(1.0f, panX));
+        const float centerY = srcH * 0.5f + maxY * (std::max)(-1.0f, (std::min)(1.0f, panY));
+        const D2D1_RECT_F source = D2D1::RectF(
+            centerX - cropW * 0.5f,
+            centerY - cropH * 0.5f,
+            centerX + cropW * 0.5f,
+            centerY + cropH * 0.5f);
+
+        d2dContext_->DrawBitmap(bitmap, rect, opacity, D2D1_INTERPOLATION_MODE_LINEAR, source);
+    }
+
+    void DrawScreenshots(D2D1_RECT_F rect) {
+        const ULONGLONG nowMs = GetTickCount64();
+        if (screenshotPaths_.empty() || nowMs - screenshotsScanTick_ > 10000) {
+            ScanScreenshots();
+            screenshotsScanTick_ = nowMs;
+        }
+
+        d2dContext_->PushAxisAlignedClip(rect, D2D1_ANTIALIAS_MODE_ALIASED);
+
+        if (screenshotPaths_.empty()) {
+            ComPtr<ID2D1SolidColorBrush> dim, hint;
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x070A0E), dim.GetAddressOf());
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x5A6168), hint.GetAddressOf());
+            d2dContext_->FillRectangle(rect, dim.Get());
+            DrawText(L"No images in Assets\\screenshots", smallMid_.Get(),
+                D2D1::RectF(rect.left + 28.0f, rect.top, rect.right - 28.0f, rect.bottom), hint.Get());
+            d2dContext_->PopAxisAlignedClip();
+            return;
+        }
+
+        const double now = nowMs / 1000.0;
+        const double hold = 6.0;
+        const int total = static_cast<int>(screenshotPaths_.size());
+        const double t = now / hold;
+        const long long base = static_cast<long long>(floor(t));
+        const int idx = static_cast<int>(((base % total) + total) % total);
+        const int nextIdx = (idx + 1) % total;
+        const double frac = t - static_cast<double>(base);
+        const double fade = frac > 0.8 ? (frac - 0.8) / 0.2 : 0.0;
+        const float easedFade = static_cast<float>(fade * fade * (3.0 - 2.0 * fade));
+        const float panX = sinf(static_cast<float>(now) * 0.05f) * 0.4f;
+        const float panY = cosf(static_cast<float>(now) * 0.037f) * 0.16f;
+        const float zoom = 1.05f + 0.02f * sinf(static_cast<float>(now) * 0.08f);
+
+        ComPtr<ID2D1Bitmap1> cur = GetCachedBitmap(screenshotPaths_[static_cast<size_t>(idx)]);
+        if (cur) DrawBitmapCover(cur.Get(), rect, 1.0f, zoom, panX, panY);
+        if (easedFade > 0.0f && total > 1) {
+            ComPtr<ID2D1Bitmap1> nxt = GetCachedBitmap(screenshotPaths_[static_cast<size_t>(nextIdx)]);
+            if (nxt) DrawBitmapCover(nxt.Get(), rect, easedFade, zoom, -panX, panY);
+        }
+        d2dContext_->PopAxisAlignedClip();
+    }
+
+    void DrawQr(const QrMatrix& qr, D2D1_RECT_F rect, ID2D1Brush* white, ID2D1Brush* black, ID2D1Brush* muted) {
+        d2dContext_->FillRectangle(rect, white);
+        if (qr.empty()) {
+            DrawText(L"QR", codeFormat_.Get(), rect, muted);
+            return;
+        }
+
+        constexpr int quiet = 4;
+        const float module = (std::min)(
+            (rect.right - rect.left) / static_cast<float>(qr.size + quiet * 2),
+            (rect.bottom - rect.top) / static_cast<float>(qr.size + quiet * 2));
+        const float qrDraw = module * static_cast<float>(qr.size + quiet * 2);
+        const float startX = rect.left + ((rect.right - rect.left) - qrDraw) * 0.5f + module * quiet;
+        const float startY = rect.top + ((rect.bottom - rect.top) - qrDraw) * 0.5f + module * quiet;
+
+        for (int y = 0; y < qr.size; ++y) {
+            for (int x = 0; x < qr.size; ++x) {
+                if (!qr.at(x, y)) continue;
+                const D2D1_RECT_F moduleRect = D2D1::RectF(
+                    startX + x * module,
+                    startY + y * module,
+                    startX + (x + 1) * module + 0.25f,
+                    startY + (y + 1) * module + 0.25f);
+                d2dContext_->FillRectangle(moduleRect, black);
+            }
+        }
+    }
+};
