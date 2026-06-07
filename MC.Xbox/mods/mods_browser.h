@@ -11,6 +11,7 @@ class AuthScreenRenderer;
 
 LaunchTarget CurrentModsTarget(const AuthUiState& state);
 int PurgeBlockedModsFromDir(const std::wstring& runtimeRoot, const std::wstring& modsDir);
+bool IsBlockedModFileName(const std::wstring& fileName);
 
 void ShowModsPage(
     ABI::Windows::UI::Core::ICoreWindow* window,

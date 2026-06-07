@@ -2,7 +2,9 @@
 
 #include "http_client.h"
 #include "launcher_common.h"
+#include "modpack_io.h"
 #include "profiles.h"
+#include "world_io.h"
 
 #include <algorithm>
 #include <atomic>
@@ -91,21 +93,49 @@ static void SendHttpResponse(SOCKET s, int status, const char* statusText, const
 }
 
 static void SendHttpFile(SOCKET s, const std::wstring& path, const std::string& downloadName, const std::string& contentType) {
-    std::vector<unsigned char> data;
-    if (!ReadBinaryFileLimited(path, data)) {
+    WIN32_FILE_ATTRIBUTE_DATA fad = {};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad) ||
+        (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
         SendHttpResponse(s, 404, "Not Found", "text/plain; charset=utf-8", "File not found.");
         return;
     }
+    const unsigned long long size =
+        (static_cast<unsigned long long>(fad.nFileSizeHigh) << 32) | fad.nFileSizeLow;
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"rb") != 0 || !f) {
+        SendHttpResponse(s, 404, "Not Found", "text/plain; charset=utf-8", "File not found.");
+        return;
+    }
+
     std::ostringstream head;
     head << "HTTP/1.1 200 OK\r\n"
         << "Content-Type: " << contentType << "\r\n"
-        << "Content-Length: " << data.size() << "\r\n"
+        << "Content-Length: " << size << "\r\n"
         << "Content-Disposition: attachment; filename=\"" << downloadName << "\"\r\n"
         << "Cache-Control: no-store\r\n"
         << "Connection: close\r\n\r\n";
     const std::string h = head.str();
-    SendAll(s, h.data(), h.size());
-    if (!data.empty()) SendAll(s, reinterpret_cast<const char*>(data.data()), data.size());
+    if (!SendAll(s, h.data(), h.size())) {
+        fclose(f);
+        return;
+    }
+
+    unsigned char buffer[256 * 1024];
+    size_t remaining = static_cast<size_t>(size);
+    if (remaining == 0 && size > 0) {
+        fclose(f);
+        SendHttpResponse(s, 500, "Internal Server Error", "text/plain; charset=utf-8", "File too large.");
+        return;
+    }
+    while (remaining > 0) {
+        const size_t chunk = (std::min)(remaining, sizeof(buffer));
+        const size_t read = fread(buffer, 1, chunk, f);
+        if (read == 0) break;
+        if (!SendAll(s, reinterpret_cast<const char*>(buffer), read)) break;
+        remaining -= read;
+    }
+    fclose(f);
 }
 
 static std::string GuessDownloadContentType(const std::wstring& name) {
@@ -115,6 +145,7 @@ static std::string GuessDownloadContentType(const std::wstring& name) {
     if (lower.size() >= 5 && lower.substr(lower.size() - 5) == L".json") return "application/json";
     if (lower.size() >= 4 && lower.substr(lower.size() - 4) == L".log") return "text/plain; charset=utf-8";
     if (lower.size() >= 4 && lower.substr(lower.size() - 4) == L".txt") return "text/plain; charset=utf-8";
+    if (lower.size() >= 7 && lower.substr(lower.size() - 7) == L".mrpack") return "application/zip";
     return "application/octet-stream";
 }
 
@@ -309,7 +340,7 @@ private:
         if (it != headers.end()) {
             contentLength = strtoull(it->second.c_str(), nullptr, 10);
         }
-        if (contentLength > 128ull * 1024ull * 1024ull) return false;
+        if (contentLength > 512ull * 1024ull * 1024ull) return false;
 
         body = data.substr(headerEnd + 4);
         while (body.size() < contentLength) {
@@ -326,22 +357,38 @@ private:
         return body.find("name=\"pin\"\r\n\r\n" + pin_) != std::string::npos;
     }
 
+    static std::string FormatBytes(unsigned long long bytes) {
+        if (bytes < 1024ull) return std::to_string(bytes) + " B";
+        if (bytes < 1024ull * 1024ull) return std::to_string(bytes / 1024ull) + " KB";
+        if (bytes < 1024ull * 1024ull * 1024ull) {
+            char buf[32] = {};
+            sprintf_s(buf, "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+            return buf;
+        }
+        char buf[32] = {};
+        sprintf_s(buf, "%.2f GB", static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+        return buf;
+    }
+
     std::string Layout(const std::string& title, const std::string& body) {
         std::ostringstream html;
         html << "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             << "<title>" << title << "</title><style>"
-            << ":root{color-scheme:dark;--bg:#081018;--panel:#101922;--line:#263545;--muted:#a8b6c3;--text:#edf3f7;--accent:#76c990;--danger:#ee867a;}"
-            << "*{box-sizing:border-box}body{font:15px/1.45 system-ui,Segoe UI,sans-serif;background:linear-gradient(180deg,#0b1420 0,#081018 260px);color:var(--text);margin:0;padding:32px;}"
-            << "main{max-width:1220px;margin:0 auto}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin:0 0 24px}"
-            << "h1{font-size:32px;line-height:1.1;margin:0 0 8px}h2{font-size:18px;margin:0 0 14px}h3{font-size:15px;margin:0 0 10px}.muted{color:var(--muted)}a{color:#89dda7;text-decoration:none}a:hover{text-decoration:underline}"
-            << ".shell{display:grid;grid-template-columns:250px minmax(0,1fr);gap:18px;align-items:start}.side{border:1px solid var(--line);background:rgba(16,25,34,.94);border-radius:10px;padding:12px;align-self:start;position:sticky;top:24px}.side-title{font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:.08em;margin:4px 0 8px}.nav{display:grid;gap:3px}.nav a{display:flex;justify-content:space-between;gap:10px;border-radius:7px;padding:9px 10px;color:var(--text);border:1px solid transparent;min-height:38px;align-items:center}.nav a:hover{background:#13202c;border-color:#243747;text-decoration:none}.nav small{color:var(--muted)}"
-            << ".content{display:grid;gap:14px;align-self:start}.hero{border:1px solid var(--line);background:rgba(16,25,34,.94);border-radius:10px;padding:20px}.hero-row{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center}.stat,.pill{display:inline-flex;align-items:center;justify-content:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:7px 11px;min-height:34px;line-height:1.1;background:#0d1620;color:var(--text);white-space:nowrap;align-self:flex-start}.stat span{color:var(--muted)}"
-            << ".grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{background:rgba(16,25,34,.94);border:1px solid var(--line);border-radius:10px;padding:18px}.stack{display:grid;gap:16px}"
-            << ".tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.tile{display:block;border:1px solid var(--line);border-radius:8px;padding:14px;background:#0d1620}.tile strong{display:block;color:var(--text);margin-bottom:4px}.tile:hover{text-decoration:none;background:#13202c}"
-            << ".toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:0;align-items:center}.path{font-family:Consolas,ui-monospace,monospace;color:#d5e2ed;word-break:break-all}.crumbs{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.crumbs a{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:5px 9px;min-height:30px;background:#0d1620}.browse-head{display:grid;gap:12px;border:1px solid var(--line);background:rgba(16,25,34,.94);border-radius:10px;padding:14px}.filebox{overflow:auto;border:1px solid var(--line);border-radius:10px;background:#0d1620}"
-            << "table{width:100%;border-collapse:collapse;min-width:620px}th,td{text-align:left;padding:12px 13px;border-bottom:1px solid #1e2b38}th{color:var(--muted);font-weight:600;background:#101b25}.type{width:92px;color:var(--muted)}.size{width:130px;color:var(--muted);font-family:Consolas,ui-monospace,monospace}"
-            << "label{display:block;color:var(--muted);font-size:13px;margin:0 0 7px}.field{display:grid;gap:8px;margin-top:12px}input,select,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #314253;background:#172231;color:#fff;max-width:100%}select{width:100%}button,.button{display:inline-block;background:var(--accent);color:#07110b;border:0;cursor:pointer;border-radius:7px;padding:10px 12px}.button.secondary{background:#172231;color:var(--text);border:1px solid #314253}.upload{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}.danger{color:var(--danger)}.empty{border:1px dashed #314253;border-radius:8px;padding:16px;color:var(--muted);background:#0d1620}"
-            << "@media(max-width:900px){body{padding:16px}.shell{grid-template-columns:1fr}.side{position:static}.grid{grid-template-columns:1fr}.top,.hero-row{display:block}.upload{grid-template-columns:1fr}}"
+            << ":root{color-scheme:dark;--bg:#071018;--panel:#101a24;--panel-2:#0c141d;--line:#243444;--muted:#9eb0bf;--text:#edf4f8;--accent:#76c990;--accent-soft:#1a2d24;--danger:#ee867a;}"
+            << "*{box-sizing:border-box}body{font:15px/1.5 system-ui,Segoe UI,sans-serif;background:radial-gradient(circle at top,#102030 0,#071018 42%);color:var(--text);margin:0;padding:28px}"
+            << "main{max-width:1240px;margin:0 auto}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin:0 0 22px}"
+            << "h1{font-size:30px;line-height:1.1;margin:0 0 8px}h2{font-size:18px;margin:0 0 10px}h3{font-size:15px;margin:0 0 8px}.muted{color:var(--muted)}a{color:#89dda7;text-decoration:none}a:hover{text-decoration:underline}code{font:13px/1.4 Consolas,ui-monospace,monospace;color:#d7e7f2}"
+            << ".shell{display:grid;grid-template-columns:248px minmax(0,1fr);gap:18px;align-items:start}.side{border:1px solid var(--line);background:rgba(16,26,36,.96);border-radius:12px;padding:14px;position:sticky;top:20px}.side-title{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:.1em;margin:10px 0 8px}.side-title:first-child{margin-top:0}.nav{display:grid;gap:4px}.nav a{display:flex;justify-content:space-between;gap:10px;border-radius:8px;padding:9px 11px;color:var(--text);border:1px solid transparent;min-height:38px;align-items:center}.nav a:hover,.nav a.active{background:#13202c;border-color:#2a3d4f;text-decoration:none}.nav small{color:var(--muted)}"
+            << ".content{display:grid;gap:16px}.hero{border:1px solid var(--line);background:linear-gradient(180deg,rgba(18,30,40,.98),rgba(12,20,29,.98));border-radius:12px;padding:20px}.hero-row{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.hero-actions{display:flex;gap:8px;flex-wrap:wrap}.stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.stat,.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:7px 12px;min-height:34px;background:#0b141d;color:var(--text);white-space:nowrap}.stat span,.pill span{color:var(--muted)}.pin{font-family:Consolas,ui-monospace,monospace;letter-spacing:.12em}"
+            << ".section{border:1px solid var(--line);background:rgba(16,26,36,.96);border-radius:12px;padding:18px}.section-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}.section-note{margin:0;color:var(--muted);font-size:14px}"
+            << ".grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.panel{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:16px}.stack{display:grid;gap:14px}"
+            << ".world-list{display:grid;gap:10px}.world-card{display:flex;justify-content:space-between;gap:12px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#0b141d}.world-card strong{display:block;margin-bottom:2px}.world-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}"
+            << ".tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.tile{display:block;border:1px solid var(--line);border-radius:10px;padding:14px;background:#0b141d}.tile strong{display:block;margin-bottom:4px}.tile:hover{text-decoration:none;background:#13202c}"
+            << ".quick-links{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.quick-link{display:block;border:1px solid var(--line);border-radius:10px;padding:14px;background:#0b141d}.quick-link strong{display:block;margin-bottom:4px}.quick-link:hover{text-decoration:none;background:#13202c}"
+            << ".toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.path{font-family:Consolas,ui-monospace,monospace;color:#d5e2ed;word-break:break-all}.crumbs{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.crumbs a{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:5px 10px;background:#0b141d}.browse-head{display:grid;gap:12px;border:1px solid var(--line);background:rgba(16,26,36,.96);border-radius:12px;padding:14px}.filebox{overflow:auto;border:1px solid var(--line);border-radius:10px;background:#0b141d}"
+            << "table{width:100%;border-collapse:collapse;min-width:620px}th,td{text-align:left;padding:11px 13px;border-bottom:1px solid #1c2a38}th{color:var(--muted);font-weight:600;background:#101a24;font-size:13px}.type{width:92px;color:var(--muted)}.size{width:120px;color:var(--muted);font-family:Consolas,ui-monospace,monospace;font-size:13px}.actions{width:170px}"
+            << "label{display:block;color:var(--muted);font-size:13px;margin:0 0 7px}.field{display:grid;gap:8px;margin-top:10px}input,select,button{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid #314253;background:#172231;color:#fff;max-width:100%}select{width:100%}button,.button{display:inline-block;background:var(--accent);color:#07110b;border:0;cursor:pointer;border-radius:8px;padding:10px 12px;font-weight:600}.button.secondary{background:#172231;color:var(--text);border:1px solid #314253;font-weight:500}.button.danger{background:#3a1d1d;color:#ffd5d0;border:1px solid #6d3434}.upload{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}.checkline{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px;margin-top:8px}.checkline input{width:auto}.danger{color:var(--danger)}.empty{border:1px dashed #314253;border-radius:10px;padding:16px;color:var(--muted);background:#0b141d}.card{max-width:420px;border:1px solid var(--line);border-radius:12px;padding:18px;background:rgba(16,26,36,.96)}"
+            << "@media(max-width:900px){body{padding:16px}.shell{grid-template-columns:1fr}.side{position:static}.grid,.quick-links{grid-template-columns:1fr}.top,.hero-row,.world-card{display:block}.world-actions{margin-top:10px;justify-content:flex-start}.upload{grid-template-columns:1fr}}"
             << "</style></head><body><main>"
             << body << "</main></body></html>";
         return html.str();
@@ -366,10 +413,11 @@ private:
         const std::string query = q == std::string::npos ? std::string() : target.substr(q + 1);
 
         if (!Authorized(query, body)) {
-            std::string form = "<h1>Bandit Launcher files</h1><div class=\"card\"><form method=\"get\">"
-                "<label>PIN <input name=\"pin\" inputmode=\"numeric\" autofocus></label> "
-                "<button>Open</button></form></div>";
-            SendHttpResponse(s, 401, "Unauthorized", "text/html; charset=utf-8", Layout("Bandit Launcher", form));
+            std::string form = "<div class=\"top\"><div><h1>Bandit Remote Files</h1><p class=\"muted\">Enter the PIN shown on your Xbox to manage files on this device.</p></div></div>"
+                "<div class=\"card\"><form method=\"get\">"
+                "<div class=\"field\"><label for=\"pin\">PIN</label><input id=\"pin\" name=\"pin\" inputmode=\"numeric\" pattern=\"[0-9]{6}\" maxlength=\"6\" autofocus></div>"
+                "<button>Open file manager</button></form></div>";
+            SendHttpResponse(s, 401, "Unauthorized", "text/html; charset=utf-8", Layout("Bandit Remote Files", form));
             return;
         }
 
@@ -387,6 +435,14 @@ private:
             HandleUpload(s, headers, body, false);
         } else if (method == "POST" && path == "/upload-datapack") {
             HandleDatapackUpload(s, headers, body);
+        } else if (method == "POST" && path == "/upload-modpack") {
+            HandleModpackUpload(s, headers, body);
+        } else if (method == "POST" && path == "/export-pack") {
+            HandleExportPack(s, body);
+        } else if (method == "POST" && path == "/export-world") {
+            HandleExportWorld(s, body);
+        } else if (method == "POST" && path == "/upload-world") {
+            HandleWorldUpload(s, headers, body);
         } else {
             SendHttpResponse(s, 404, "Not Found", "text/plain; charset=utf-8", "Not found.");
         }
@@ -400,22 +456,40 @@ private:
         return pathAndQuery + (pathAndQuery.find('?') == std::string::npos ? "?pin=" : "&pin=") + pin_;
     }
 
-    std::string NavLink(const char* scope, const std::wstring& label, const std::wstring& hint) const {
-        std::string url = "/browse?scope=" + std::string(scope);
-        return "<a href=\"" + UrlWithPin(url) + "\"><span>" + HtmlEscape(label) + "</span><small>" + HtmlEscape(hint) + "</small></a>";
+    std::string FormFieldValue(const std::string& body, const std::string& key) const {
+        size_t pos = 0;
+        while (pos <= body.size()) {
+            const size_t amp = body.find('&', pos);
+            const std::string part = body.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
+            const size_t eq = part.find('=');
+            const std::string k = UrlDecode(eq == std::string::npos ? part : part.substr(0, eq));
+            if (k == key) return UrlDecode(eq == std::string::npos ? std::string() : part.substr(eq + 1));
+            if (amp == std::string::npos) break;
+            pos = amp + 1;
+        }
+        return {};
     }
 
-    std::string SidebarHtml() const {
+    std::string SidebarHtml(const char* activeScope = nullptr) const {
+        auto nav = [&](const char* scope, const std::wstring& label, const std::wstring& hint) {
+            const bool active = activeScope && scope == std::string(activeScope);
+            return std::string("<a") + (active ? " class=\"active\"" : "") + " href=\"" +
+                UrlWithPin("/browse?scope=" + std::string(scope)) + "\"><span>" +
+                HtmlEscape(label) + "</span><small>" + HtmlEscape(hint) + "</small></a>";
+        };
         std::ostringstream out;
-        out << "<aside class=\"side\"><div class=\"side-title\">Places</div><nav class=\"nav\">"
-            << NavLink("profile", L"Active profile", L"game")
-            << NavLink("saves", L"Saves", L"worlds")
-            << NavLink("mods", L"Mods", L"jars")
-            << NavLink("resourcepacks", L"Resource packs", L"zip")
-            << NavLink("logs", L"Current logs", L"now")
-            << NavLink("previous", L"Previous logs", L"last")
-            << NavLink("crash", L"Crash reports", L"zip")
-            << NavLink("runtime", L"Runtime cache", L"read")
+        out << "<aside class=\"side\">"
+            << "<div class=\"side-title\">Profile</div><nav class=\"nav\">"
+            << "<a href=\"" << UrlWithPin("/") << "\"><span>Dashboard</span><small>home</small></a>"
+            << nav("profile", L"Game files", L"folder")
+            << nav("saves", L"Worlds", L"saves")
+            << nav("mods", L"Mods", L"jars")
+            << nav("resourcepacks", L"Resource packs", L"zip")
+            << "</nav><div class=\"side-title\">Diagnostics</div><nav class=\"nav\">"
+            << nav("logs", L"Current logs", L"now")
+            << nav("previous", L"Previous logs", L"last")
+            << nav("crash", L"Crash reports", L"zip")
+            << nav("runtime", L"Runtime cache", L"read")
             << "</nav></aside>";
         return out.str();
     }
@@ -482,51 +556,293 @@ private:
         return true;
     }
 
-    std::vector<std::wstring> ActiveSaveNames() {
-        std::vector<std::wstring> saves;
-        EnsureProfilesInitialized(runtimeRoot_);
-        const std::wstring active = GetActiveProfileId(runtimeRoot_);
-        EnsureProfileGameDataInitialized(runtimeRoot_, active);
-        const std::wstring savesDir = ProfileGameDir(runtimeRoot_, active) + L"\\saves";
-        WIN32_FIND_DATAW fd = {};
-        HANDLE h = FindFirstFileW((savesDir + L"\\*").c_str(), &fd);
-        if (h != INVALID_HANDLE_VALUE) {
-            do {
-                if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) saves.push_back(fd.cFileName);
-            } while (FindNextFileW(h, &fd));
-            FindClose(h);
-        }
-        std::sort(saves.begin(), saves.end(), [](const std::wstring& a, const std::wstring& b) {
-            return ToLowerW(a) < ToLowerW(b);
-        });
-        return saves;
+    bool IsWorldFolder(const std::wstring& dir) const {
+        return GetFileAttributesW((dir + L"\\level.dat").c_str()) != INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW((dir + L"\\level.dat_old").c_str()) != INVALID_FILE_ATTRIBUTES;
     }
 
-    bool IsSafeSaveName(const std::wstring& name) const {
-        if (name.empty()) return false;
-        if (name == L"." || name == L"..") return false;
-        return name.find(L'\\') == std::wstring::npos &&
-            name.find(L'/') == std::wstring::npos &&
-            name.find(L':') == std::wstring::npos;
-    }
-
-    std::string DatapackFormHtml(const std::vector<std::wstring>& saves) {
+    std::string ExportPackHtml(const std::wstring& activeId) {
         std::ostringstream out;
-        out << "<section class=\"panel\"><h2>Save datapacks</h2>";
-        if (saves.empty()) {
-            out << "<div class=\"empty\">No saves found for the active profile. Create a world first, then refresh this page.</div></section>";
+        out << "<section class=\"panel\"><h3>Export profile pack</h3>";
+        if (activeId == kVanillaProfileId) {
+            out << "<div class=\"empty\">Vanilla cannot be exported. Select a mod profile on the console first.</div></section>";
             return out.str();
         }
-        out << "<form method=\"post\" action=\"/upload-datapack\" enctype=\"multipart/form-data\">"
-            << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
-            << "<div class=\"grid\"><div class=\"field\"><label for=\"save\">World</label><select id=\"save\" name=\"save\">";
-        for (const std::wstring& save : saves) {
-            out << "<option value=\"" << HtmlEscape(save) << "\">" << HtmlEscape(save) << "</option>";
+        const std::wstring exportPath = DefaultProfileExportPath(runtimeRoot_, activeId);
+        const bool hasExport = GetFileAttributesW(exportPath.c_str()) != INVALID_FILE_ATTRIBUTES;
+        out << "<p class=\"muted\">Create a Modrinth-compatible <code>.mrpack</code> for the Modrinth App on PC.</p>"
+            << "<div class=\"toolbar\" style=\"margin-top:12px\">"
+            << "<form method=\"post\" action=\"/export-pack\"><input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\"><button>Build .mrpack</button></form>";
+        if (hasExport) {
+            out << "<a class=\"button secondary\" href=\"/download?pin=" << pin_ << "&amp;file=export:profile\">Download</a>";
         }
-        out << "</select></div><div class=\"field\"><label for=\"datapack\">Datapack .zip</label>"
-            << "<div class=\"upload\"><input id=\"datapack\" type=\"file\" name=\"file\" accept=\".zip\"><button>Upload datapack</button></div></div></div>"
-            << "<p class=\"muted\">Saved to the selected world's datapacks folder.</p></form></section>";
+        out << "</div></section>";
+        return out.str();
+    }
+
+    std::string ModpackImportHtml() {
+        std::ostringstream out;
+        out << "<section class=\"panel\"><h3>Import Modrinth pack</h3>"
+            << "<form method=\"post\" action=\"/upload-modpack\" enctype=\"multipart/form-data\">"
+            << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
+            << "<div class=\"field\"><label for=\"modpackfile\">Modrinth .mrpack</label>"
+            << "<div class=\"upload\"><input id=\"modpackfile\" type=\"file\" name=\"file\" accept=\".mrpack\"><button>Import pack</button></div></div>"
+            << "</form>"
+            << "<p class=\"muted\">Installs into the active profile. Large packs can take several minutes.</p></section>";
+        return out.str();
+    }
+
+    void HandleExportWorld(SOCKET s, const std::string& body) {
+        if (!Authorized("", body)) {
+            SendHttpResponse(s, 401, "Unauthorized", "text/html; charset=utf-8", Layout("Unauthorized", "<h1>Unauthorized</h1>"));
+            return;
+        }
+        const std::wstring worldName = a2w(FormFieldValue(body, "save").c_str());
+        if (!IsSafeWorldName(worldName)) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Export failed", "<h1>Export failed</h1><p>Invalid world name.</p>"));
+            return;
+        }
+        EnsureProfilesInitialized(runtimeRoot_);
+        const std::wstring active = GetActiveProfileId(runtimeRoot_);
+        const std::wstring exportPath = DefaultWorldExportPath(runtimeRoot_, worldName);
+        std::wstring exportError;
+        if (!ExportWorldZip(runtimeRoot_, active, worldName, exportPath, exportError)) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Export failed", "<h1>Export failed</h1><p>" + HtmlEscape(exportError) + "</p>"));
+            return;
+        }
+        SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8",
+            Layout("World export complete",
+                "<div class=\"top\"><h1>World export complete</h1><a class=\"pill\" href=\"/?pin=" + pin_ + "\">Files home</a></div>"
+                "<p>Built a zip for <strong>" + HtmlEscape(worldName) + "</strong>.</p>"
+                "<p><a class=\"button\" href=\"/download?pin=" + pin_ + "&amp;file=export:world:" + FormUrlEncode(w2a(worldName)) + "\">Download world zip</a></p>"));
+    }
+
+    void HandleWorldUpload(SOCKET s, const std::map<std::string, std::string>& headers, const std::string& body) {
+        std::wstring name;
+        std::vector<unsigned char> data;
+        if (!ExtractMultipartFile(headers, body, name, data)) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>No world zip was received.</p>"));
+            return;
+        }
+        const std::wstring lower = ToLowerW(name);
+        if (lower.size() < 4 || lower.substr(lower.size() - 4) != L".zip") {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>World imports must be .zip files.</p>"));
+            return;
+        }
+
+        std::string saveText;
+        if (!ExtractMultipartTextField(headers, body, "save", saveText)) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Enter the world name to save as.</p>"));
+            return;
+        }
+        const std::wstring saveName = a2w(saveText.c_str());
+        if (!IsSafeWorldName(saveName)) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Invalid world name.</p>"));
+            return;
+        }
+
+        std::string replaceText;
+        const bool replaceExisting = ExtractMultipartTextField(headers, body, "replace", replaceText) && replaceText == "1";
+
+        EnsureProfilesInitialized(runtimeRoot_);
+        const std::wstring active = GetActiveProfileId(runtimeRoot_);
+        if (active == kVanillaProfileId) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Vanilla is read only. Create or select a profile on the console first.</p>"));
+            return;
+        }
+
+        const std::wstring importDir = runtimeRoot_ + L"\\imports";
+        EnsureDirectoryTree(importDir);
+        const std::wstring path = importDir + L"\\" + SafeFileName(name);
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, path.c_str(), L"wb") != 0 || !f) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Could not save the uploaded world zip.</p>"));
+            return;
+        }
+        const bool wrote = fwrite(data.data(), 1, data.size(), f) == data.size();
+        fclose(f);
+        if (!wrote) {
+            DeleteFileW(path.c_str());
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Could not finish writing the world zip.</p>"));
+            return;
+        }
+
+        WriteLogF(L"Remote world upload saved: %s bytes=%zu", path.c_str(), data.size());
+        std::wstring importError;
+        const bool ok = ImportWorldFromZip(path, runtimeRoot_, active, saveName, replaceExisting, importError);
+        DeleteFileW(path.c_str());
+        if (!ok) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>" + HtmlEscape(importError.empty() ? L"World import failed" : importError) + "</p>"));
+            return;
+        }
+
+        const Profile profile = GetProfileById(runtimeRoot_, active);
+        SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8",
+            Layout("World import complete",
+                "<div class=\"top\"><h1>World import complete</h1><a class=\"pill\" href=\"/?pin=" + pin_ + "\">Files home</a></div>"
+                "<p>Imported <strong>" + HtmlEscape(saveName) + "</strong> into profile <strong>" + HtmlEscape(profile.name) + "</strong>.</p>"
+                "<p><a class=\"button secondary\" href=\"" + UrlWithPin("/browse?scope=saves&path=" + FormUrlEncode(w2a(saveName))) + "\">Open world folder</a></p>"));
+    }
+
+    void HandleExportPack(SOCKET s, const std::string& body) {
+        if (!Authorized("", body)) {
+            SendHttpResponse(s, 401, "Unauthorized", "text/html; charset=utf-8", Layout("Unauthorized", "<h1>Unauthorized</h1>"));
+            return;
+        }
+        EnsureProfilesInitialized(runtimeRoot_);
+        const std::wstring active = GetActiveProfileId(runtimeRoot_);
+        if (active == kVanillaProfileId) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Export failed", "<h1>Export failed</h1><p>Vanilla cannot be exported.</p>"));
+            return;
+        }
+        const std::wstring exportPath = DefaultProfileExportPath(runtimeRoot_, active);
+        std::wstring exportError;
+        if (!ExportProfileMrpack(runtimeRoot_, active, exportPath, exportError)) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Export failed", "<h1>Export failed</h1><p>" + HtmlEscape(exportError) + "</p>"));
+            return;
+        }
+        const Profile profile = GetProfileById(runtimeRoot_, active);
+        SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8",
+            Layout("Export complete",
+                "<div class=\"top\"><h1>Export complete</h1><a class=\"pill\" href=\"/?pin=" + pin_ + "\">Files home</a></div>"
+                "<p>Built a Modrinth pack for <strong>" + HtmlEscape(profile.name) + "</strong>.</p>"
+                "<p><a class=\"button\" href=\"/download?pin=" + pin_ + "&amp;file=export:profile\">Download .mrpack</a></p>"));
+    }
+
+    void HandleModpackUpload(SOCKET s, const std::map<std::string, std::string>& headers, const std::string& body) {
+        std::wstring name;
+        std::vector<unsigned char> data;
+        if (!ExtractMultipartFile(headers, body, name, data)) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>No pack file was received.</p>"));
+            return;
+        }
+
+        const std::wstring lower = ToLowerW(name);
+        if (lower.size() < 7 || lower.substr(lower.size() - 7) != L".mrpack") {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Upload a Modrinth .mrpack file.</p>"));
+            return;
+        }
+
+        EnsureProfilesInitialized(runtimeRoot_);
+        const std::wstring active = GetActiveProfileId(runtimeRoot_);
+        if (active == kVanillaProfileId) {
+            SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Vanilla is read only. Create or select a profile on the console first.</p>"));
+            return;
+        }
+
+        const std::wstring importDir = runtimeRoot_ + L"\\imports";
+        EnsureDirectoryTree(importDir);
+        const std::wstring path = importDir + L"\\" + name;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, path.c_str(), L"wb") != 0 || !f) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Could not save the uploaded pack.</p>"));
+            return;
+        }
+        const bool wrote = fwrite(data.data(), 1, data.size(), f) == data.size();
+        fclose(f);
+        if (!wrote) {
+            DeleteFileW(path.c_str());
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>Could not finish writing the pack.</p>"));
+            return;
+        }
+
+        WriteLogF(L"Remote modpack upload saved: %s bytes=%zu", path.c_str(), data.size());
+        std::wstring installError;
+        const bool ok = InstallModpackFromFile(path, runtimeRoot_, active, installError);
+        DeleteFileW(path.c_str());
+        if (!ok) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Import failed", "<h1>Import failed</h1><p>" + HtmlEscape(installError.empty() ? L"Pack install failed" : installError) + "</p>"));
+            return;
+        }
+
+        const Profile profile = GetProfileById(runtimeRoot_, active);
+        SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8",
+            Layout("Import complete",
+                "<div class=\"top\"><h1>Import complete</h1><a class=\"pill\" href=\"/?pin=" + pin_ + "\">Files home</a></div>"
+                "<p>Installed <strong>" + HtmlEscape(name) + "</strong> into profile <strong>" + HtmlEscape(profile.name) + "</strong>.</p>"));
+    }
+
+    std::string WorldsSectionHtml(const std::vector<std::wstring>& saves, const std::wstring& activeId) {
+        std::ostringstream out;
+        out << "<section class=\"section\" id=\"worlds\"><div class=\"section-head\"><div><h2>Worlds</h2>"
+            << "<p class=\"section-note\">Export full saves as zip files for PC, or import a world zip into the active profile.</p></div>"
+            << "<a class=\"button secondary\" href=\"" << UrlWithPin("/browse?scope=saves") << "\">Browse saves</a></div>";
+        if (saves.empty()) {
+            out << "<div class=\"empty\">No worlds yet. Play Minecraft on the console to create one, then refresh this page.</div>";
+        } else {
+            out << "<div class=\"world-list\">";
+            for (const std::wstring& save : saves) {
+                const std::wstring exportPath = DefaultWorldExportPath(runtimeRoot_, save);
+                const bool hasExport = GetFileAttributesW(exportPath.c_str()) != INVALID_FILE_ATTRIBUTES;
+                out << "<div class=\"world-card\"><div><strong>" << HtmlEscape(save) << "</strong>"
+                    << "<div class=\"muted\">Full world folder as a PC-friendly zip</div></div><div class=\"world-actions\">"
+                    << "<form method=\"post\" action=\"/export-world\"><input type=\"hidden\" name=\"pin\" value=\"" << pin_
+                    << "\"><input type=\"hidden\" name=\"save\" value=\"" << HtmlEscape(save) << "\"><button class=\"secondary\">Build zip</button></form>";
+                if (hasExport) {
+                    out << "<a class=\"button secondary\" href=\"/download?pin=" << pin_ << "&amp;file=export:world:"
+                        << FormUrlEncode(w2a(save)) << "\">Download</a>";
+                }
+                out << "<a class=\"button secondary\" href=\"" << UrlWithPin("/browse?scope=saves&path=" + FormUrlEncode(w2a(save)))
+                    << "\">Open</a></div></div>";
+            }
+            out << "</div>";
+        }
+        out << "<div class=\"panel\" style=\"margin-top:14px\"><h3>Import world</h3>"
+            << "<form method=\"post\" action=\"/upload-world\" enctype=\"multipart/form-data\">"
+            << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
+            << "<div class=\"grid\"><div class=\"field\"><label for=\"worldname\">Save as</label>"
+            << "<input id=\"worldname\" name=\"save\" placeholder=\"World name\" required></div>"
+            << "<div class=\"field\"><label for=\"worldzip\">World .zip</label>"
+            << "<div class=\"upload\"><input id=\"worldzip\" type=\"file\" name=\"file\" accept=\".zip\" required><button>Import world</button></div></div></div>"
+            << "<label class=\"checkline\"><input type=\"checkbox\" name=\"replace\" value=\"1\"> Replace existing world with the same name</label>"
+            << "<p class=\"muted\">Accepts a zip with <code>level.dat</code> at the root or inside one folder. Large worlds may take several minutes.</p>"
+            << "</form></div>"
+            << "<div class=\"panel\" style=\"margin-top:14px\"><h3>Upload datapack</h3>";
+        if (saves.empty()) {
+            out << "<div class=\"empty\">Create a world first to upload datapacks.</div>";
+        } else {
+            out << "<form method=\"post\" action=\"/upload-datapack\" enctype=\"multipart/form-data\">"
+                << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
+                << "<div class=\"grid\"><div class=\"field\"><label for=\"datapacksave\">World</label><select id=\"datapacksave\" name=\"save\">";
+            for (const std::wstring& save : saves) {
+                out << "<option value=\"" << HtmlEscape(save) << "\">" << HtmlEscape(save) << "</option>";
+            }
+            out << "</select></div><div class=\"field\"><label for=\"datapack\">Datapack .zip</label>"
+                << "<div class=\"upload\"><input id=\"datapack\" type=\"file\" name=\"file\" accept=\".zip\"><button>Upload datapack</button></div></div></div>"
+                << "</form>";
+        }
+        out << "</div></section>";
+        return out.str();
+    }
+
+    std::string DiagnosticsSectionHtml() {
+        std::ostringstream out;
+        out << "<section class=\"section\" id=\"diagnostics\"><div class=\"section-head\"><div><h2>Logs and diagnostics</h2>"
+            << "<p class=\"section-note\">Download launcher logs, game logs, and crash report bundles.</p></div></div>"
+            << "<div class=\"quick-links\">"
+            << "<a class=\"quick-link\" href=\"" << UrlWithPin("/browse?scope=logs") << "\"><strong>Current logs</strong><span class=\"muted\">Latest launcher session</span></a>"
+            << "<a class=\"quick-link\" href=\"" << UrlWithPin("/browse?scope=previous") << "\"><strong>Previous logs</strong><span class=\"muted\">Last archived session</span></a>"
+            << "<a class=\"quick-link\" href=\"" << UrlWithPin("/browse?scope=crash") << "\"><strong>Crash reports</strong><span class=\"muted\">Zip bundles and reports</span></a>"
+            << "<a class=\"quick-link\" href=\"" << UrlWithPin("/browse?scope=runtime") << "\"><strong>Runtime cache</strong><span class=\"muted\">Downloaded game files</span></a>"
+            << "</div></section>";
         return out.str();
     }
 
@@ -535,36 +851,42 @@ private:
         const std::wstring activeId = GetActiveProfileId(runtimeRoot_);
         const Profile active = GetProfileById(runtimeRoot_, activeId);
         const LaunchTarget activeTarget = ResolveProfileTarget(runtimeRoot_, active);
-        const std::vector<std::wstring> saves = ActiveSaveNames();
+        const std::vector<std::wstring> saves = ListProfileWorlds(runtimeRoot_, activeId);
         std::ostringstream out;
-        out << "<div class=\"top\"><div><h1>Bandit Launcher files</h1>"
-            << "<div class=\"muted\">Remote file manager for the active profile and launcher logs.</div></div>"
-            << "<a class=\"pill\" href=\"" << UrlWithPin("/") << "\">Refresh</a></div>"
+        out << "<div class=\"top\"><div><h1>Bandit Remote Files</h1>"
+            << "<div class=\"muted\">Manage worlds, mods, packs, and logs for the active profile on this Xbox.</div></div>"
+            << "<div class=\"hero-actions\"><span class=\"pill\"><span>PIN</span> <span class=\"pin\">" << pin_ << "</span></span>"
+            << "<a class=\"pill\" href=\"" << UrlWithPin("/") << "\">Refresh</a></div></div>"
             << "<div class=\"shell\">" << SidebarHtml() << "<div class=\"content\">"
             << "<section class=\"hero\"><div class=\"hero-row\"><div><h2>" << HtmlEscape(active.name) << "</h2><div class=\"muted\">"
             << HtmlEscape(TargetProfileText(activeTarget)) << "</div></div><a class=\"button secondary\" href=\""
-            << UrlWithPin("/browse?scope=profile") << "\">Browse profile files</a></div>"
+            << UrlWithPin("/browse?scope=profile") << "\">Browse game files</a></div>"
             << "<div class=\"stats\"><div class=\"stat\"><span>Profile</span> " << HtmlEscape(activeId) << "</div>"
-            << "<div class=\"stat\"><span>Saves</span> " << saves.size() << "</div>"
-            << "<div class=\"stat\"><span>Logs</span> current plus previous</div></div></section>"
-            << DatapackFormHtml(saves)
-            << "<div class=\"grid\"><section class=\"panel\"><h2>Upload mod</h2>"
+            << "<div class=\"stat\"><span>Worlds</span> " << saves.size() << "</div>"
+            << "<div class=\"stat\"><span>Port</span> " << port_ << "</div></div></section>"
+            << WorldsSectionHtml(saves, activeId)
+            << "<section class=\"section\" id=\"mods\"><div class=\"section-head\"><div><h2>Mods and packs</h2>"
+            << "<p class=\"section-note\">Upload individual files or move whole mod setups with Modrinth packs.</p></div></div>"
+            << "<div class=\"grid\"><section class=\"panel\"><h3>Upload mod</h3>"
             << "<form method=\"post\" action=\"/upload-mod\" enctype=\"multipart/form-data\">"
             << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
-            << "<div class=\"field\"><label for=\"modfile\">Fabric mod .jar</label><div class=\"upload\"><input id=\"modfile\" type=\"file\" name=\"file\" accept=\".jar\"><button>Upload mod</button></div></div>"
-            << "</form><p class=\"muted\">Saved to profiles/" << HtmlEscape(activeId) << "/game/mods.</p></section>"
-            << "<section class=\"panel\"><h2>Upload resource pack</h2>"
+            << "<div class=\"field\"><label for=\"modfile\">Mod .jar</label><div class=\"upload\"><input id=\"modfile\" type=\"file\" name=\"file\" accept=\".jar\"><button>Upload mod</button></div></div>"
+            << "</form><p class=\"muted\">Saved to the active profile mods folder.</p></section>"
+            << "<section class=\"panel\"><h3>Upload resource pack</h3>"
             << "<form method=\"post\" action=\"/upload-resourcepack\" enctype=\"multipart/form-data\">"
             << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
             << "<div class=\"field\"><label for=\"packfile\">Resource pack .zip</label><div class=\"upload\"><input id=\"packfile\" type=\"file\" name=\"file\" accept=\".zip\"><button>Upload pack</button></div></div>"
-            << "</form><p class=\"muted\">Saved to the active profile resourcepacks folder.</p></section></div>"
-            << "<section class=\"panel\"><h2>Browse common folders</h2><div class=\"tiles\">"
-            << BrowseLink("saves", L"Saves")
+            << "</form></section>"
+            << ExportPackHtml(activeId)
+            << ModpackImportHtml()
+            << "</div></section>"
+            << DiagnosticsSectionHtml()
+            << "<section class=\"section\"><div class=\"section-head\"><div><h2>Browse folders</h2>"
+            << "<p class=\"section-note\">Inspect files directly when you need more than the quick actions above.</p></div></div><div class=\"tiles\">"
+            << BrowseLink("saves", L"Worlds")
             << BrowseLink("mods", L"Mods")
             << BrowseLink("resourcepacks", L"Resource packs")
-            << BrowseLink("logs", L"Current logs")
-            << BrowseLink("previous", L"Previous logs")
-            << BrowseLink("crash", L"Crash reports")
+            << BrowseLink("profile", L"Game files")
             << "</div></section></div></div>";
         return out.str();
     }
@@ -587,7 +909,7 @@ private:
         std::ostringstream out;
         out << "<div class=\"top\"><div><h1>" << HtmlEscape(title) << "</h1><div class=\"muted\">Browse, download, and inspect files for this area.</div></div>"
             << "<a class=\"pill\" href=\"" << UrlWithPin("/") << "\">Files home</a></div>";
-        out << "<div class=\"shell\">" << SidebarHtml() << "<div class=\"content\"><section class=\"browse-head\"><div><div class=\"muted\">Location</div><div class=\"path\">"
+        out << "<div class=\"shell\">" << SidebarHtml(scope.c_str()) << "<div class=\"content\"><section class=\"browse-head\"><div><div class=\"muted\">Location</div><div class=\"path\">"
             << (rel.empty() ? std::string("\\") : HtmlEscape(rel)) << "</div></div><div class=\"crumbs\"><a href=\""
             << UrlWithPin("/browse?scope=" + scope) << "\">Root</a>";
         if (!rel.empty()) {
@@ -611,9 +933,22 @@ private:
             const std::wstring parent = slash == std::wstring::npos ? L"" : rel.substr(0, slash);
             out << "<a class=\"pill\" href=\"" << UrlWithPin("/browse?scope=" + scope + "&path=" + FormUrlEncode(w2a(parent))) << "\">Up one folder</a>";
         }
-        out << "<a class=\"pill\" href=\"" << UrlWithPin("/browse?scope=" + scope + "&path=" + FormUrlEncode(w2a(rel))) << "\">Refresh</a></div></section>";
+        out << "<a class=\"pill\" href=\"" << UrlWithPin("/browse?scope=" + scope + "&path=" + FormUrlEncode(w2a(rel))) << "\">Refresh</a>";
+        if (scope == "saves" && IsWorldFolder(dir)) {
+            const std::wstring worldName = rel.empty() ? GetFileName(dir) : rel.substr(0, rel.find(L'\\'));
+            if (IsSafeWorldName(worldName)) {
+                out << "<form method=\"post\" action=\"/export-world\"><input type=\"hidden\" name=\"pin\" value=\"" << pin_
+                    << "\"><input type=\"hidden\" name=\"save\" value=\"" << HtmlEscape(worldName)
+                    << "\"><button>Build world zip</button></form>";
+                out << "<a class=\"button secondary\" href=\"/download?pin=" << pin_ << "&amp;file=export:world:"
+                    << FormUrlEncode(w2a(worldName)) << "\">Download zip</a>";
+            }
+        }
+        out << "</div></section>";
 
-        out << "<section class=\"filebox\"><table><thead><tr><th class=\"type\">Type</th><th>Name</th><th class=\"size\">Size</th></tr></thead><tbody>";
+        out << "<section class=\"filebox\"><table><thead><tr><th class=\"type\">Type</th><th>Name</th><th class=\"size\">Size</th>";
+        if (scope == "saves" && rel.empty()) out << "<th class=\"actions\">Actions</th>";
+        out << "</tr></thead><tbody>";
         WIN32_FIND_DATAW fd = {};
         HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
         bool any = false;
@@ -627,16 +962,28 @@ private:
                 const std::wstring childRel = rel.empty() ? name : rel + L"\\" + name;
                 if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                     ++folderCount;
-                    out << "<tr><td class=\"type\">Folder</td><td><a href=\"" << UrlWithPin("/browse?scope=" + scope + "&path=" + FormUrlEncode(w2a(childRel))) << "\">" << HtmlEscape(name) << "</a></td><td class=\"muted\">-</td></tr>";
+                    out << "<tr><td class=\"type\">Folder</td><td><a href=\"" << UrlWithPin("/browse?scope=" + scope + "&path=" + FormUrlEncode(w2a(childRel))) << "\">" << HtmlEscape(name) << "</a></td><td class=\"muted\">-</td>";
+                    if (scope == "saves" && rel.empty() && IsSafeWorldName(name)) {
+                        out << "<td class=\"actions\"><a class=\"button secondary\" href=\"/download?pin=" << pin_ << "&amp;file=export:world:"
+                            << FormUrlEncode(w2a(name)) << "\">Zip</a></td>";
+                    } else if (scope == "saves" && rel.empty()) {
+                        out << "<td></td>";
+                    }
+                    out << "</tr>";
                 } else {
                     ++fileCount;
                     const unsigned long long bytes = (static_cast<unsigned long long>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
-                    out << "<tr><td class=\"type\">File</td><td><a href=\"" << UrlWithPin("/download-path?scope=" + scope + "&path=" + FormUrlEncode(w2a(childRel))) << "\">" << HtmlEscape(name) << "</a></td><td class=\"size\">" << bytes << "</td></tr>";
+                    out << "<tr><td class=\"type\">File</td><td><a href=\"" << UrlWithPin("/download-path?scope=" + scope + "&path=" + FormUrlEncode(w2a(childRel))) << "\">" << HtmlEscape(name) << "</a></td><td class=\"size\">" << FormatBytes(bytes) << "</td>";
+                    if (scope == "saves" && rel.empty()) out << "<td></td>";
+                    out << "</tr>";
                 }
             } while (FindNextFileW(h, &fd));
             FindClose(h);
         }
-        if (!any) out << "<tr><td colspan=\"3\" class=\"muted\">This folder is empty.</td></tr>";
+        if (!any) {
+            const int cols = (scope == "saves" && rel.empty()) ? 4 : 3;
+            out << "<tr><td colspan=\"" << cols << "\" class=\"muted\">This folder is empty.</td></tr>";
+        }
         out << "</tbody></table></section><div class=\"stats\"><div class=\"stat\"><span>Folders</span> " << folderCount
             << "</div><div class=\"stat\"><span>Files</span> " << fileCount << "</div></div></div></div>";
         return out.str();
@@ -700,6 +1047,38 @@ private:
                 return;
             }
             path = CrashReportsDir(runtimeRoot_) + L"\\" + name;
+        } else if (file == "export:profile") {
+            EnsureProfilesInitialized(runtimeRoot_);
+            const std::wstring active = GetActiveProfileId(runtimeRoot_);
+            if (active == kVanillaProfileId) {
+                SendHttpResponse(s, 400, "Bad Request", "text/plain; charset=utf-8", "Vanilla cannot be exported.");
+                return;
+            }
+            path = DefaultProfileExportPath(runtimeRoot_, active);
+            std::wstring exportError;
+            if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES &&
+                !ExportProfileMrpack(runtimeRoot_, active, path, exportError)) {
+                SendHttpResponse(s, 500, "Internal Server Error", "text/plain; charset=utf-8", w2a(exportError.c_str()));
+                return;
+            }
+            const size_t slash = path.find_last_of(L'\\');
+            name = slash == std::wstring::npos ? path : path.substr(slash + 1);
+        } else if (file.rfind("export:world:", 0) == 0) {
+            const std::wstring worldName = a2w(UrlDecode(file.substr(13)).c_str());
+            if (!IsSafeWorldName(worldName)) {
+                SendHttpResponse(s, 400, "Bad Request", "text/plain; charset=utf-8", "Bad world.");
+                return;
+            }
+            EnsureProfilesInitialized(runtimeRoot_);
+            const std::wstring active = GetActiveProfileId(runtimeRoot_);
+            path = DefaultWorldExportPath(runtimeRoot_, worldName);
+            std::wstring exportError;
+            if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES &&
+                !ExportWorldZip(runtimeRoot_, active, worldName, path, exportError)) {
+                SendHttpResponse(s, 500, "Internal Server Error", "text/plain; charset=utf-8", w2a(exportError.c_str()));
+                return;
+            }
+            name = SafeFileName(worldName) + L".zip";
         } else {
             SendHttpResponse(s, 400, "Bad Request", "text/plain; charset=utf-8", "Bad file.");
             return;
@@ -860,7 +1239,7 @@ private:
         }
 
         const std::wstring saveName = a2w(saveText.c_str());
-        if (!IsSafeSaveName(saveName)) {
+        if (!IsSafeWorldName(saveName)) {
             SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8", Layout("Upload failed", "<h1>Upload failed</h1><p>Bad world name.</p>"));
             return;
         }

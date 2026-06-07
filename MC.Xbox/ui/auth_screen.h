@@ -337,61 +337,76 @@ public:
                 const float top = frame.top + 34.0f;
                 const bool isActive = !state.modsProfileId.empty() && state.modsProfileId == state.activeProfileId;
 
+                const float btnW = 148.0f;
+                const float btnH = 54.0f;
+                const float btnGap = 12.0f;
+                const float actionBarW = state.modsProfileBuiltin ? btnW : (btnW * 4.0f + btnGap * 3.0f);
+
                 const std::wstring nameShown = state.modsRenaming ? (state.modsRenameText + L"_") : state.modsProfileName;
                 DrawText(nameShown.c_str(), titleFormat_.Get(),
-                    D2D1::RectF(left, top, right - 380.0f, top + 48.0f), state.modsRenaming ? accent.Get() : white.Get());
+                    D2D1::RectF(left, top, right - actionBarW - 28.0f, top + 48.0f), state.modsRenaming ? accent.Get() : white.Get());
                 const std::wstring sub = state.modsProfileBuiltin
                     ? (state.modsProfileTargetText + L" - Pure vanilla, always available")
                     : (state.modsProfileTargetText + L" - " + std::to_wstring(state.modsProfileMods.size()) +
                         (state.modsProfileMods.size() == 1 ? L" mod installed" : L" mods installed"));
                 DrawText(sub.c_str(), captionFormat_.Get(),
-                    D2D1::RectF(left, top + 50.0f, right - 380.0f, top + 74.0f), muted.Get());
+                    D2D1::RectF(left, top + 50.0f, right - actionBarW - 28.0f, top + 74.0f), muted.Get());
 
-                const float btnW = 168.0f;
-                const float btnH = 54.0f;
                 const D2D1_RECT_F playBtn = D2D1::RectF(right - btnW, top, right, top + btnH);
                 const bool playFocus = state.modsProfileFocus == 0;
                 if (playFocus) GlowSelect(playBtn, 12.0f);
                 FillRound(playBtn, isActive ? panel.Get() : accent.Get(), 12.0f);
                 StrokeRound(playBtn, accent.Get(), 12.0f, playFocus ? 3.0f : 2.0f);
-                DrawIcon(L"\uE768", D2D1::RectF(playBtn.left + 16.0f, playBtn.top, playBtn.left + 44.0f, playBtn.bottom), isActive ? muted.Get() : black.Get());
-                DrawText(isActive ? L"Playing" : L"Play this", bodyMid_.Get(),
-                    D2D1::RectF(playBtn.left + 50.0f, playBtn.top, playBtn.right - 8.0f, playBtn.bottom), isActive ? muted.Get() : black.Get());
+                DrawIcon(L"\uE768", D2D1::RectF(playBtn.left + 14.0f, playBtn.top, playBtn.left + 40.0f, playBtn.bottom), isActive ? muted.Get() : black.Get());
+                DrawText(isActive ? L"Playing" : L"Play", bodyMid_.Get(),
+                    D2D1::RectF(playBtn.left + 44.0f, playBtn.top, playBtn.right - 8.0f, playBtn.bottom), isActive ? muted.Get() : black.Get());
 
                 if (!state.modsProfileBuiltin) {
-                    const D2D1_RECT_F backupBtn = D2D1::RectF(right - btnW * 2.0f - 16.0f, top, right - btnW - 16.0f, top + btnH);
+                    const D2D1_RECT_F exportBtn = D2D1::RectF(right - btnW * 2.0f - btnGap, top, right - btnW - btnGap, top + btnH);
+                    const bool exportFocus = state.modsProfileFocus == 4;
+                    if (exportFocus) GlowSelect(exportBtn, 12.0f);
+                    FillRound(exportBtn, surfaceFill.Get(), 12.0f);
+                    StrokeRound(exportBtn, accent.Get(), 12.0f, exportFocus ? 3.0f : 2.0f);
+                    DrawIcon(L"\uE898", D2D1::RectF(exportBtn.left + 14.0f, exportBtn.top, exportBtn.left + 40.0f, exportBtn.bottom), accent.Get());
+                    DrawText(L"Export", bodyMid_.Get(),
+                        D2D1::RectF(exportBtn.left + 44.0f, exportBtn.top, exportBtn.right - 8.0f, exportBtn.bottom), accent.Get());
+
+                    const D2D1_RECT_F backupBtn = D2D1::RectF(right - btnW * 3.0f - btnGap * 2.0f, top, right - btnW * 2.0f - btnGap * 2.0f, top + btnH);
                     const bool backupFocus = state.modsProfileFocus == 3;
                     if (backupFocus) GlowSelect(backupBtn, 12.0f);
                     FillRound(backupBtn, surfaceFill.Get(), 12.0f);
                     StrokeRound(backupBtn, accent.Get(), 12.0f, backupFocus ? 3.0f : 2.0f);
-                    DrawIcon(L"\uE74E", D2D1::RectF(backupBtn.left + 16.0f, backupBtn.top, backupBtn.left + 44.0f, backupBtn.bottom), accent.Get());
+                    DrawIcon(L"\uE74E", D2D1::RectF(backupBtn.left + 14.0f, backupBtn.top, backupBtn.left + 40.0f, backupBtn.bottom), accent.Get());
                     DrawText(L"Backup", bodyMid_.Get(),
-                        D2D1::RectF(backupBtn.left + 50.0f, backupBtn.top, backupBtn.right - 8.0f, backupBtn.bottom), accent.Get());
+                        D2D1::RectF(backupBtn.left + 44.0f, backupBtn.top, backupBtn.right - 8.0f, backupBtn.bottom), accent.Get());
 
-                    const D2D1_RECT_F delBtn = D2D1::RectF(right - btnW * 3.0f - 32.0f, top, right - btnW * 2.0f - 32.0f, top + btnH);
+                    const D2D1_RECT_F delBtn = D2D1::RectF(right - btnW * 4.0f - btnGap * 3.0f, top, right - btnW * 3.0f - btnGap * 3.0f, top + btnH);
                     const bool delFocus = state.modsProfileFocus == 1;
                     if (delFocus) GlowSelect(delBtn, 12.0f);
                     FillRound(delBtn, surfaceFill.Get(), 12.0f);
                     StrokeRound(delBtn, danger.Get(), 12.0f, delFocus ? 3.0f : 2.0f);
-                    DrawIcon(L"\uE74D", D2D1::RectF(delBtn.left + 16.0f, delBtn.top, delBtn.left + 44.0f, delBtn.bottom), danger.Get());
+                    DrawIcon(L"\uE74D", D2D1::RectF(delBtn.left + 14.0f, delBtn.top, delBtn.left + 40.0f, delBtn.bottom), danger.Get());
                     DrawText(L"Delete", bodyMid_.Get(),
-                        D2D1::RectF(delBtn.left + 50.0f, delBtn.top, delBtn.right - 8.0f, delBtn.bottom), danger.Get());
+                        D2D1::RectF(delBtn.left + 44.0f, delBtn.top, delBtn.right - 8.0f, delBtn.bottom), danger.Get());
                 }
 
                 const bool gridFocus = state.modsProfileFocus == 2;
+                const float hintTop = top + btnH + 12.0f;
                 DrawText(state.modsRenaming
                             ? L"Type a name, then close the keyboard to save"
                             : (state.modsProfileBuiltin
                                 ? L"B  Back"
                                 : (gridFocus ? L"B  Back      X  Remove mod      Y  Rename"
-                                             : L"B  Back      A select      X Delete      Y Rename")),
+                                             : (state.modsProfileFocus == 4
+                                                 ? L"B  Back      A  Export .mrpack for PC"
+                                                 : L"B  Back      A select      X Delete      Y Rename"))),
                     smallFormat_.Get(),
-                    D2D1::RectF(left, top + btnH + 12.0f, right, top + btnH + 40.0f),
+                    D2D1::RectF(left, hintTop, right, hintTop + 28.0f),
                     state.modsRenaming ? accent.Get() : muted.Get());
 
                 if (!state.status.empty()) {
                     DrawText(state.status.c_str(), smallFormat_.Get(),
-                        D2D1::RectF(left, top + btnH + 42.0f, right, top + btnH + 68.0f),
+                        D2D1::RectF(left, hintTop + 30.0f, right, hintTop + 56.0f),
                         state.isError ? danger.Get() : accent.Get());
                 }
 
@@ -707,7 +722,7 @@ public:
             StrokeRound(box, softEdge.Get(), 14.0f, 1.0f);
             DrawText(state.detail.c_str(), bodyMid_.Get(), D2D1::RectF(box.left + 24.0f, box.top + 20.0f, box.right - 24.0f, box.top + 92.0f), white.Get());
             DrawText(
-                L"Download logs and crash reports from another device on the same network.\nUpload .jar mods or .zip resource packs to the active profile.",
+                L"Open the URL and PIN in a browser on your PC or phone.\nImport and export worlds, mods, resource packs, and Modrinth .mrpack files for the active profile.",
                 smallFormat_.Get(),
                 D2D1::RectF(box.left + 24.0f, box.top + 104.0f, box.right - 24.0f, box.bottom - 22.0f),
                 muted.Get());

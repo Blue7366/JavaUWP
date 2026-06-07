@@ -1,5 +1,6 @@
 ﻿#include "mods_browser.h"
 
+#include "modpack_io.h"
 #include "auth_screen.h"
 #include "runtime_manager.h"
 #include "http_client.h"
@@ -631,7 +632,7 @@ static const BlockedMod* FindBlockedModFile(const std::wstring& fileName) {
     return nullptr;
 }
 
-static bool IsBlockedModFile(const std::wstring& fileName) {
+bool IsBlockedModFileName(const std::wstring& fileName) {
     return FindBlockedModFile(fileName) != nullptr;
 }
 
@@ -1036,20 +1037,7 @@ static bool ResolveModpackMrpack(const std::wstring& idOrSlug, std::wstring& url
     }
 }
 
-static std::wstring ModpackDestForRelative(const std::wstring& relRaw, const std::wstring& gameDir, const std::wstring& userModsDir) {
-    std::wstring rel = relRaw;
-    std::replace(rel.begin(), rel.end(), L'/', L'\\');
-    const std::wstring lower = ToLowerW(rel);
-    const size_t slash = rel.find_last_of(L'\\');
-    const std::wstring base = slash == std::wstring::npos ? rel : rel.substr(slash + 1);
-    if (lower.rfind(L"mods\\", 0) == 0) {
-        return userModsDir + L"\\" + base;
-    }
-    return gameDir + L"\\" + rel;
-}
-
-static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot, const std::wstring& gameDir, const std::wstring& userModsDir, std::wstring& error, const std::string& gameVersion, const std::string& loaderId) {
-    using namespace winrt::Windows::Data::Json;
+static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot, const std::wstring& profileId, std::wstring& error, const std::string& gameVersion, const std::string& loaderId) {
     const std::wstring idOrSlug = !card.projectId.empty() ? card.projectId : card.slug;
 
     SetInstallStatus(L"Resolving " + card.title + L"...");
@@ -1069,169 +1057,10 @@ static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot,
         return false;
     }
 
-    std::vector<unsigned char> packBytes;
-    {
-        std::ifstream f(mrPath, std::ios::binary | std::ios::ate);
-        if (!f) { error = L"Could not open downloaded pack"; return false; }
-        const std::streamoff sz = f.tellg();
-        f.seekg(0);
-        if (sz > 0) {
-            packBytes.resize(static_cast<size_t>(sz));
-            f.read(reinterpret_cast<char*>(packBytes.data()), sz);
-        }
-    }
-    if (packBytes.empty()) { error = L"Downloaded pack was empty"; return false; }
-
-    mz_zip_archive zip{};
-    if (!mz_zip_reader_init_mem(&zip, packBytes.data(), packBytes.size(), 0)) {
-        error = L"Pack is not a valid .mrpack archive";
-        return false;
-    }
-
-    std::string indexJson;
-    {
-        const int idx = mz_zip_reader_locate_file(&zip, "modrinth.index.json", nullptr, 0);
-        if (idx < 0) { mz_zip_reader_end(&zip); error = L"Pack is missing modrinth.index.json"; return false; }
-        size_t outSize = 0;
-        void* p = mz_zip_reader_extract_to_heap(&zip, static_cast<mz_uint>(idx), &outSize, 0);
-        if (!p) { mz_zip_reader_end(&zip); error = L"Could not read pack index"; return false; }
-        indexJson.assign(static_cast<const char*>(p), outSize);
-        mz_free(p);
-    }
-
-    struct PackFile { std::wstring path; std::wstring url; std::string sha1; unsigned long long size = 0; };
-    std::vector<PackFile> jobs;
-    int skipped = 0;
-    try {
-        JsonObject root = JsonObject::Parse(winrt::to_hstring(indexJson));
-        JsonArray files{ nullptr };
-        if (root.HasKey(L"files") && root.GetNamedValue(L"files").ValueType() == JsonValueType::Array) {
-            files = root.GetNamedArray(L"files");
-        }
-        const uint32_t fcount = files ? files.Size() : 0;
-        for (uint32_t i = 0; i < fcount; ++i) {
-            auto v = files.GetAt(i);
-            if (v.ValueType() != JsonValueType::Object) continue;
-            JsonObject fo = v.GetObject();
-            if (fo.HasKey(L"env") && fo.GetNamedValue(L"env").ValueType() == JsonValueType::Object) {
-                if (JsonStringOrEmpty(fo.GetNamedObject(L"env"), L"client") == L"unsupported") continue;
-            }
-            const std::wstring path = JsonStringOrEmpty(fo, L"path");
-            if (path.empty()) continue;
-            std::wstring durl;
-            if (fo.HasKey(L"downloads") && fo.GetNamedValue(L"downloads").ValueType() == JsonValueType::Array) {
-                JsonArray dls = fo.GetNamedArray(L"downloads");
-                if (dls.Size() > 0 && dls.GetAt(0).ValueType() == JsonValueType::String) {
-                    durl = dls.GetAt(0).GetString().c_str();
-                }
-            }
-            if (durl.empty()) continue;
-            std::string sha1;
-            if (fo.HasKey(L"hashes") && fo.GetNamedValue(L"hashes").ValueType() == JsonValueType::Object) {
-                sha1 = w2a(JsonStringOrEmpty(fo.GetNamedObject(L"hashes"), L"sha1"));
-            }
-            unsigned long long fsize = 0;
-            if (fo.HasKey(L"fileSize") && fo.GetNamedValue(L"fileSize").ValueType() == JsonValueType::Number) {
-                fsize = static_cast<unsigned long long>(fo.GetNamedNumber(L"fileSize"));
-            }
-            const size_t slash = path.find_last_of(L"/\\");
-            const std::wstring base = slash == std::wstring::npos ? path : path.substr(slash + 1);
-            if (const BlockedMod* blocked = FindBlockedModFile(base)) {
-                WriteLogF(L"Skipping blocked modpack file: %s (%s)", base.c_str(), blocked->reason);
-                ++skipped;
-                continue;
-            }
-            jobs.push_back({ path, durl, sha1, fsize });
-        }
-    } catch (const winrt::hresult_error&) {
-        mz_zip_reader_end(&zip);
-        error = L"Could not parse pack index";
-        return false;
-    }
-
-    g_installTotal.store(static_cast<int>(jobs.size()));
-    g_installDone.store(0);
-    std::wstring firstError;
-    int done = 0;
-    for (const PackFile& job : jobs) {
-        const std::wstring dest = ModpackDestForRelative(job.path, gameDir, userModsDir);
-        const size_t bslash = job.path.find_last_of(L"/\\");
-        const std::wstring base = bslash == std::wstring::npos ? job.path : job.path.substr(bslash + 1);
-        const std::wstring label = std::to_wstring(done + 1) + L" of " + std::to_wstring(jobs.size()) + L"  " + base;
-        SetInstallStatus(label);
-        if (!job.sha1.empty() && FileMatchesSha1(dest, job.sha1)) { ++done; g_installDone.store(done); continue; }
-        EnsureDirectoryTree(GetParentDir(dest));
-        const std::wstring tmp = dest + L".download";
-        DeleteFileW(tmp.c_str());
-        if (DownloadUrlToFile(job.url, tmp, MakeInstallProgress(label, job.size)) && (job.sha1.empty() || FileMatchesSha1(tmp, job.sha1))) {
-            DeleteFileW(dest.c_str());
-            if (!MoveFileExW(tmp.c_str(), dest.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                DeleteFileW(tmp.c_str());
-                if (firstError.empty()) firstError = L"Some pack files could not be saved";
-            }
-        } else {
-            DeleteFileW(tmp.c_str());
-            if (firstError.empty()) firstError = L"Some pack files failed to download";
-        }
-        ++done;
-        g_installDone.store(done);
-    }
-
-    SetInstallStatus(L"Applying overrides...");
-    const mz_uint entryCount = mz_zip_reader_get_num_files(&zip);
-    for (mz_uint i = 0; i < entryCount; ++i) {
-        if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
-        mz_zip_archive_file_stat st;
-        if (!mz_zip_reader_file_stat(&zip, i, &st)) continue;
-        std::string name = st.m_filename;
-        std::string prefix;
-        if (name.rfind("overrides/", 0) == 0) prefix = "overrides/";
-        else if (name.rfind("client-overrides/", 0) == 0) prefix = "client-overrides/";
-        else continue;
-        const std::string relA = name.substr(prefix.size());
-        if (relA.empty()) continue;
-        const std::wstring rel = a2w(relA.c_str());
-        const std::wstring dest = ModpackDestForRelative(rel, gameDir, userModsDir);
-        const size_t slash = dest.find_last_of(L'\\');
-        const std::wstring base = slash == std::wstring::npos ? dest : dest.substr(slash + 1);
-        if (ToLowerW(dest).find(ToLowerW(userModsDir)) == 0) {
-            if (const BlockedMod* blocked = FindBlockedModFile(base)) {
-                WriteLogF(L"Skipping blocked modpack override: %s (%s)", base.c_str(), blocked->reason);
-                ++skipped;
-                continue;
-            }
-        }
-        size_t outSize = 0;
-        void* p = mz_zip_reader_extract_to_heap(&zip, i, &outSize, 0);
-        if (!p) continue;
-        WriteAllBytes(dest, p, outSize);
-        mz_free(p);
-    }
-
-    mz_zip_reader_end(&zip);
+    SetInstallStatus(L"Installing " + card.title + L"...");
+    const bool ok = InstallModpackFromFile(mrPath, runtimeRoot, profileId, error);
     DeleteFileW(mrPath.c_str());
-
-    {
-        WIN32_FIND_DATAW fd;
-        HANDLE h = FindFirstFileW((userModsDir + L"\\*.jar").c_str(), &fd);
-        if (h != INVALID_HANDLE_VALUE) {
-            do {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-                if (const BlockedMod* blocked = FindBlockedModFile(fd.cFileName)) {
-                    WriteLogF(L"Deleting blocked modpack residue: %s (%s)", fd.cFileName, blocked->reason);
-                    DeleteFileW((userModsDir + L"\\" + fd.cFileName).c_str());
-                    DeleteFileW(ModMetaPath(runtimeRoot, fd.cFileName).c_str());
-                    ++skipped;
-                }
-            } while (FindNextFileW(h, &fd));
-            FindClose(h);
-        }
-    }
-
-    WriteLogF(L"Modpack install done: %d files, %d blocked", done, skipped);
-    if (jobs.empty() && firstError.empty()) { error = L"Pack had no installable client files"; return false; }
-    if (!firstError.empty()) { error = firstError; return false; }
-    return true;
+    return ok;
 }
 
 static void CleanInlineMd(const std::wstring& s, std::wstring& out,
@@ -1412,7 +1241,7 @@ static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot
         if (copy.isModpack) {
             const std::wstring pid = CreateProfile(rootCopy, copy.title, targetCopy);
             WriteLogF(L"Installing modpack '%s' target=%s into profile %s", copy.title.c_str(), targetCopy.targetId.c_str(), pid.c_str());
-            ok = InstallModpack(copy, rootCopy, ProfileGameDir(rootCopy, pid), ProfileModsDir(rootCopy, pid), err, gameVersion, loaderId);
+            ok = InstallModpack(copy, rootCopy, pid, err, gameVersion, loaderId);
             if (ok) {
                 SetActiveProfileId(rootCopy, pid);
                 SetInstallStatus(L"Installed profile " + copy.title);
@@ -2261,22 +2090,30 @@ void ShowModsPage(
                 ModsSearchBeginInput();
             } else if (!gridFocus && leftDown && !leftWasDown) {
                 if (!state.modsProfileBuiltin) {
-                    if (state.modsProfileFocus == 0) state.modsProfileFocus = 3;
+                    if (state.modsProfileFocus == 0) state.modsProfileFocus = 4;
+                    else if (state.modsProfileFocus == 4) state.modsProfileFocus = 3;
                     else if (state.modsProfileFocus == 3) state.modsProfileFocus = 1;
                     else state.modsProfileFocus = 1;
                 }
             } else if (!gridFocus && rightDown && !rightWasDown) {
                 if (!state.modsProfileBuiltin) {
                     if (state.modsProfileFocus == 1) state.modsProfileFocus = 3;
-                    else if (state.modsProfileFocus == 3) state.modsProfileFocus = 0;
+                    else if (state.modsProfileFocus == 3) state.modsProfileFocus = 4;
+                    else if (state.modsProfileFocus == 4) state.modsProfileFocus = 0;
                     else state.modsProfileFocus = 0;
                 } else {
                     state.modsProfileFocus = 0;
                 }
             } else if (!gridFocus && (downDown && !downWasDown)) {
-                if (pmTotal > 0) { state.modsProfileFocus = 2; state.modsProfileSel = 0; state.modsProfileScroll = 0; }
+                if (pmTotal > 0) {
+                    state.modsProfileFocus = 2;
+                    state.modsProfileSel = 0;
+                    state.modsProfileScroll = 0;
+                }
             } else if (gridFocus && (upDown && !upWasDown)) {
-                if (state.modsProfileSel < 2) { state.modsProfileFocus = 0; }
+                if (state.modsProfileSel < 2) {
+                    state.modsProfileFocus = state.modsProfileBuiltin ? 0 : 4;
+                }
                 else { state.modsProfileSel -= 2; pmEnsureVisible(); }
             } else if (gridFocus && (downDown && !downWasDown)) {
                 if (state.modsProfileSel + 2 < pmTotal) { state.modsProfileSel += 2; pmEnsureVisible(); }
@@ -2322,6 +2159,16 @@ void ShowModsPage(
                         state.isError = false;
                     } else {
                         state.status = L"Could not back up " + state.modsProfileName;
+                        state.isError = true;
+                    }
+                } else if (state.modsProfileFocus == 4 && !state.modsProfileBuiltin) {
+                    std::wstring exportError;
+                    const std::wstring exportPath = DefaultProfileExportPath(runtimeRoot, state.modsProfileId);
+                    if (ExportProfileMrpack(runtimeRoot, state.modsProfileId, exportPath, exportError)) {
+                        state.status = L"Exported " + state.modsProfileName + L". Download the .mrpack from Remote Files on your PC.";
+                        state.isError = false;
+                    } else {
+                        state.status = exportError.empty() ? L"Could not export profile pack" : exportError;
                         state.isError = true;
                     }
                 } else if (state.modsProfileFocus == 0) {

@@ -146,9 +146,12 @@ The launcher includes a remote file manager for devices on the same local networ
 
 Remote Files can:
 
+- Export and import full world saves as `.zip` files for the active profile.
 - Upload `.jar` mods to the active profile.
 - Upload `.zip` resource packs to the active profile.
 - Upload `.zip` datapacks into a selected world under the active profile.
+- Import Modrinth `.mrpack` files into the active profile.
+- Export the active profile as a Modrinth-compatible `.mrpack` for use on PC.
 - Browse active profile files, saves, mods, resource packs, logs, crash reports, and the shared runtime cache.
 - Download current logs, previous run logs, and crash report zips for debugging.
 
