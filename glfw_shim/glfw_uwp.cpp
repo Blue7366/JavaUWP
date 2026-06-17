@@ -628,6 +628,16 @@ static bool EnvFlagEnabled(const wchar_t* name) {
         _wcsicmp(value, L"on") == 0;
 }
 
+static bool EnvFlagDisabled(const wchar_t* name) {
+    wchar_t value[32] = {};
+    DWORD len = GetEnvironmentVariableW(name, value, ARRAYSIZE(value));
+    if (len == 0 || len >= ARRAYSIZE(value)) return false;
+    return _wcsicmp(value, L"0") == 0 ||
+        _wcsicmp(value, L"false") == 0 ||
+        _wcsicmp(value, L"no") == 0 ||
+        _wcsicmp(value, L"off") == 0;
+}
+
 static bool DirectoryExists(const wchar_t* path) {
     const DWORD attrs = GetFileAttributesW(path);
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
@@ -1274,7 +1284,7 @@ static int ScaleDimensionToPixels(FLOAT value, double scale, int fallback) {
 }
 
 static bool UseRawScaledFramebuffer() {
-    return EnvFlagEnabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
+    return !EnvFlagDisabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
 }
 
 static void GetDisplayScale(double& scaleX, double& scaleY) {
@@ -1336,9 +1346,9 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
 
     const int newWindowWidth = bounds.Width > 0 ? (int)(bounds.Width + 0.5f) : g_window_width;
     const int newWindowHeight = bounds.Height > 0 ? (int)(bounds.Height + 0.5f) : g_window_height;
-    // Mesa's UWP CoreWindow surface is sized in view pixels. Reporting raw
-    // display pixels on 4K displays makes Minecraft set a viewport larger than
-    // the EGL surface, which clips rendering into the lower-left corner.
+    // CoreWindow bounds are UWP view pixels, while Mesa presents a raw-pixel
+    // surface. GLFW must expose framebuffer/video-mode sizes in raw pixels or
+    // Minecraft renders into only part of a 4K surface and overflows 720p.
     const bool rawScaledFramebuffer = UseRawScaledFramebuffer();
     const int newFramebufferWidth = rawScaledFramebuffer
         ? ScaleDimensionToPixels(bounds.Width, scaleX, g_framebuffer_width)
@@ -3325,8 +3335,15 @@ extern "C" __declspec(dllexport) const char* glfwGetMonitorName(GLFWmonitor*) { 
 extern "C" __declspec(dllexport) void  glfwSetMonitorUserPointer(GLFWmonitor*, void*) {}
 extern "C" __declspec(dllexport) void* glfwGetMonitorUserPointer(GLFWmonitor*) { return NULL; }
 extern "C" __declspec(dllexport) GLFWmonitorfun glfwSetMonitorCallback(GLFWmonitorfun cb) { GLFWmonitorfun p=g_monitor_cb; g_monitor_cb=cb; return p; }
-extern "C" __declspec(dllexport) const GLFWvidmode* glfwGetVideoModes(GLFWmonitor*, int*c) { if(c)*c=1; return &g_vidmode; }
-extern "C" __declspec(dllexport) const GLFWvidmode* glfwGetVideoMode(GLFWmonitor*) { return &g_vidmode; }
+extern "C" __declspec(dllexport) const GLFWvidmode* glfwGetVideoModes(GLFWmonitor*, int*c) {
+    RefreshWindowMetrics(false);
+    if(c)*c=1;
+    return &g_vidmode;
+}
+extern "C" __declspec(dllexport) const GLFWvidmode* glfwGetVideoMode(GLFWmonitor*) {
+    RefreshWindowMetrics(false);
+    return &g_vidmode;
+}
 extern "C" __declspec(dllexport) void glfwSetGamma(GLFWmonitor*, float) {}
 extern "C" __declspec(dllexport) const GLFWgammaramp* glfwGetGammaRamp(GLFWmonitor*) { return NULL; }
 extern "C" __declspec(dllexport) void glfwSetGammaRamp(GLFWmonitor*, const GLFWgammaramp*) {}

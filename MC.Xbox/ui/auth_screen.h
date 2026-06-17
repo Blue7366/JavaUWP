@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <vector>
 
@@ -41,6 +42,9 @@ public:
         }
         width_ = bounds.Width > 0 ? bounds.Width : 1280;
         height_ = bounds.Height > 0 ? bounds.Height : 720;
+        displayScale_ = ReadDisplayScale();
+        renderWidthPx_ = ScaleToPixels(width_, displayScale_, 1280);
+        renderHeightPx_ = ScaleToPixels(height_, displayScale_, 720);
 
         const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
         D3D_FEATURE_LEVEL levels[] = {
@@ -120,8 +124,8 @@ public:
         }
 
         DXGI_SWAP_CHAIN_DESC1 desc = {};
-        desc.Width = static_cast<UINT>(width_);
-        desc.Height = static_cast<UINT>(height_);
+        desc.Width = renderWidthPx_;
+        desc.Height = renderHeightPx_;
         desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
         desc.Stereo = FALSE;
         desc.SampleDesc.Count = 1;
@@ -143,24 +147,7 @@ public:
             return false;
         }
 
-        ComPtr<IDXGISurface> backBuffer;
-        hr = swapChain_->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen back buffer failed hr=0x%08X", hr);
-            return false;
-        }
-
-        D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
-            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
-            96.0f,
-            96.0f);
-        hr = d2dContext_->CreateBitmapFromDxgiSurface(backBuffer.Get(), &props, targetBitmap_.GetAddressOf());
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen target bitmap failed hr=0x%08X", hr);
-            return false;
-        }
-        d2dContext_->SetTarget(targetBitmap_.Get());
+        if (!CreateTargetBitmap()) return false;
 
         hr = DWriteCreateFactory(
             DWRITE_FACTORY_TYPE_SHARED,
@@ -181,13 +168,14 @@ public:
         }
 
         CreateTextFormats();
-        WriteLogF(L"Auth screen initialized %.0fx%.0f featureLevel=0x%X",
-            width_, height_, static_cast<unsigned int>(level));
+        WriteLogF(L"Auth screen initialized %.0fx%.0f view, %ux%u backbuffer, scale=%.3f featureLevel=0x%X",
+            width_, height_, renderWidthPx_, renderHeightPx_, displayScale_, static_cast<unsigned int>(level));
         return true;
     }
 
     void Render(const AuthUiState& state) {
         if (!d2dContext_ || !swapChain_) return;
+        if (!EnsureRenderTargetSize()) return;
 
         ComPtr<ID2D1SolidColorBrush> white;
         ComPtr<ID2D1SolidColorBrush> muted;
@@ -869,6 +857,99 @@ private:
     ULONGLONG screenshotsScanTick_ = 0;
     float width_ = 1280.0f;
     float height_ = 720.0f;
+    float displayScale_ = 1.0f;
+    UINT renderWidthPx_ = 1280;
+    UINT renderHeightPx_ = 720;
+
+    static float ReadDisplayScale() {
+        wchar_t value[32] = {};
+        const DWORD len = GetEnvironmentVariableW(L"MC_RAW_PIXELS_PER_VIEW_PIXEL", value, ARRAYSIZE(value));
+        if (len > 0 && len < ARRAYSIZE(value)) {
+            wchar_t* end = nullptr;
+            const double parsed = wcstod(value, &end);
+            if (parsed >= 0.5 && parsed <= 8.0) {
+                return static_cast<float>(parsed);
+            }
+        }
+        return 1.0f;
+    }
+
+    static UINT ScaleToPixels(float value, float scale, UINT fallback) {
+        if (value <= 0.0f) return fallback;
+        if (scale <= 0.0f) scale = 1.0f;
+        const double scaled = static_cast<double>(value) * static_cast<double>(scale);
+        return scaled >= 1.0 ? static_cast<UINT>(scaled + 0.5) : 1;
+    }
+
+    bool ReadRenderMetrics(float& viewW, float& viewH, float& scale, UINT& pixelW, UINT& pixelH) {
+        Rect bounds = {};
+        if (!window_ || FAILED(window_->get_Bounds(&bounds))) {
+            return false;
+        }
+        viewW = bounds.Width > 0 ? bounds.Width : width_;
+        viewH = bounds.Height > 0 ? bounds.Height : height_;
+        scale = ReadDisplayScale();
+        pixelW = ScaleToPixels(viewW, scale, renderWidthPx_);
+        pixelH = ScaleToPixels(viewH, scale, renderHeightPx_);
+        return true;
+    }
+
+    bool EnsureRenderTargetSize() {
+        float viewW = width_;
+        float viewH = height_;
+        float scale = displayScale_;
+        UINT pixelW = renderWidthPx_;
+        UINT pixelH = renderHeightPx_;
+        if (!ReadRenderMetrics(viewW, viewH, scale, pixelW, pixelH)) {
+            return true;
+        }
+        if (viewW == width_ && viewH == height_ &&
+            scale == displayScale_ &&
+            pixelW == renderWidthPx_ && pixelH == renderHeightPx_) {
+            return true;
+        }
+
+        d2dContext_->SetTarget(nullptr);
+        targetBitmap_.Reset();
+        HRESULT hr = swapChain_->ResizeBuffers(0, pixelW, pixelH, DXGI_FORMAT_UNKNOWN, 0);
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen ResizeBuffers failed hr=0x%08X target=%ux%u scale=%.3f", hr, pixelW, pixelH, scale);
+            return false;
+        }
+
+        width_ = viewW;
+        height_ = viewH;
+        displayScale_ = scale;
+        renderWidthPx_ = pixelW;
+        renderHeightPx_ = pixelH;
+        bitmapCache_.clear();
+        WriteLogF(L"Auth screen resized %.0fx%.0f view, %ux%u backbuffer, scale=%.3f",
+            width_, height_, renderWidthPx_, renderHeightPx_, displayScale_);
+        return CreateTargetBitmap();
+    }
+
+    bool CreateTargetBitmap() {
+        ComPtr<IDXGISurface> backBuffer;
+        HRESULT hr = swapChain_->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()));
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen back buffer failed hr=0x%08X", hr);
+            return false;
+        }
+
+        const float dpi = 96.0f * (displayScale_ > 0.0f ? displayScale_ : 1.0f);
+        D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+            dpi,
+            dpi);
+        hr = d2dContext_->CreateBitmapFromDxgiSurface(backBuffer.Get(), &props, targetBitmap_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen target bitmap failed hr=0x%08X", hr);
+            return false;
+        }
+        d2dContext_->SetTarget(targetBitmap_.Get());
+        return true;
+    }
 
     void CreateTextFormats() {
         if (!dwriteFactory_) return;
