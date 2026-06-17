@@ -1,10 +1,15 @@
+param(
+    [string]$MinecraftVersion
+)
+
 # Download Minecraft assets for the configured game version.
 $ErrorActionPreference = "Stop"
 
+if ($MinecraftVersion) { $env:MC_VERSION = $MinecraftVersion }
 . (Join-Path $PSScriptRoot "common.ps1")
 
 $root = Resolve-RepoRoot
-$version = $ProjectConfig.MinecraftVersion
+$version = if ($MinecraftVersion) { $MinecraftVersion } else { $ProjectConfig.MinecraftVersion }
 $assetsDir = Get-ConfigPath "AssetsDir"
 
 New-Item -ItemType Directory -Force -Path "$assetsDir\indexes" | Out-Null

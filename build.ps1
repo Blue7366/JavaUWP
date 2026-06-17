@@ -496,6 +496,14 @@ $manifestTargets = @(
     Import-Csv -Path $versionCatalogSource -Delimiter "`t" |
         Where-Object { $_.loader -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
 )
+function Test-ForgeControllerTarget {
+    param([Parameter(Mandatory = $true)]$Target)
+
+    return $Target.loader -eq "forge" -and
+        $Target.minecraftVersion -eq "1.20.1" -and
+        $Target.loaderVersion -eq "47.4.20"
+}
+
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
     Where-Object { $_ } |
     Select-Object -Unique
@@ -647,6 +655,10 @@ if (-not $SkipVersionCompat) {
     foreach ($row in $forgeTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-forge-$lv"
+        if (-not (Test-ForgeControllerTarget -Target $row)) {
+            Write-Host "Skipping per-version forge controller mod for ${targetId}: no bundled controller provider for this target"
+            continue
+        }
         $outDir = Join-Path $versionModsRoot $targetId
         Write-Host "Building per-version forge controller mod: $targetId"
         try {

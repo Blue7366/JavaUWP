@@ -66,7 +66,7 @@ function Invoke-ForgeTool {
 
 $clientJar = Join-Path $gameDir "versions\$MinecraftVersion\$MinecraftVersion.jar"
 if (-not (Test-Path $clientJar)) {
-    & (Join-Path $root "scripts\download-libs.ps1")
+    & (Join-Path $root "scripts\download-libs.ps1") -MinecraftVersion $MinecraftVersion
     if (-not (Test-Path $clientJar)) {
         throw "Minecraft client jar missing at $clientJar"
     }

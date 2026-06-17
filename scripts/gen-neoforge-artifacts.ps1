@@ -2,11 +2,20 @@ param(
     [string]$NeoForgeVersion = "21.1.233",
     [string]$McVersion = "1.21.1",
     [string]$NeoFormVersion = "20240808.144430",
-    [string]$JavaExe = "C:\Program Files\Amazon Corretto\jdk25.0.3_9\bin\java.exe"
+    [string]$JavaExe
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot "common.ps1")
+
+if (-not $JavaExe) {
+    $JavaExe = Join-Path (Resolve-JavaHome) "bin\java.exe"
+}
+if (-not (Test-Path $JavaExe)) {
+    throw "java.exe not found at $JavaExe"
+}
+
 $mcAndNeoForm = "$McVersion-$NeoFormVersion"
 $work = Join-Path $env:TEMP "nfgen-$NeoForgeVersion"
 $target = Join-Path $work "mc"

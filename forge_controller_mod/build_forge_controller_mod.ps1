@@ -24,6 +24,10 @@ $javaHome = Resolve-JavaHome
 $javac = Join-Path $javaHome "bin\javac.exe"
 $jar = Join-Path $javaHome "bin\jar.exe"
 
+if ($MinecraftVersion -ne "1.20.1" -or $ForgeVersion -ne "1.20.1-47.4.20") {
+    throw "Forge controller mod sources currently support only Minecraft 1.20.1 / Forge 1.20.1-47.4.20."
+}
+
 $patchedClient = & (Join-Path $root "scripts\prepare-forge-patched-client.ps1") `
     -MinecraftVersion $MinecraftVersion `
     -ForgeVersion $ForgeVersion

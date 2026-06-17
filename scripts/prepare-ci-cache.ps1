@@ -202,7 +202,7 @@ function Add-LibraryJar {
 New-Item -ItemType Directory -Force -Path $gameDir, $assetsDir, $nativesDir, $toolsDir, $notesDir | Out-Null
 
 Write-Host "=== Downloading Minecraft libraries ==="
-& (Join-Path $root "scripts\download-libs.ps1")
+& (Join-Path $root "scripts\download-libs.ps1") -MinecraftVersion $version
 
 $versionJson = Get-MinecraftVersionJson
 if (-not $assetIndex) {
