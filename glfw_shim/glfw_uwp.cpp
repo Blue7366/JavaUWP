@@ -1889,6 +1889,14 @@ static void SetRemoteMouseButtonState(int button, int action) {
     FireRemoteMouseButtonCallback(button, action);
 }
 static void SetMouseButtonState(int button, int action, bool fireCallback) {
+    if (button < 0 || button >= (int)sizeof(g_mouse_state)) return;
+    const unsigned char state = action == GLFW_RELEASE ? GLFW_RELEASE : GLFW_PRESS;
+    if (g_mouse_state[button] == state) return;
+
+    g_mouse_state[button] = state;
+    if (fireCallback) {
+        FireRemoteMouseButtonCallback(button, state);
+    }
 }
 static bool AnyMouseButtonDown() {
     for (int i = 0; i < (int)sizeof(g_mouse_state); ++i) {
