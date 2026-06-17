@@ -54,22 +54,16 @@ public:
             D3D_FEATURE_LEVEL_10_0
         };
         D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
-        HRESULT hr = D3D11CreateDevice(
-            nullptr,
-            D3D_DRIVER_TYPE_HARDWARE,
-            nullptr,
-            flags,
-            levels,
-            ARRAYSIZE(levels),
-            D3D11_SDK_VERSION,
-            d3dDevice_.GetAddressOf(),
-            &level,
-            d3dContext_.GetAddressOf());
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen D3D11CreateDevice hardware failed hr=0x%08X; trying WARP", hr);
+        HRESULT hr = E_FAIL;
+        const bool preferWarp = IsXboxOneGraphicsRuntime();
+        const D3D_DRIVER_TYPE driverOrder[] = {
+            preferWarp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE,
+            preferWarp ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP
+        };
+        for (D3D_DRIVER_TYPE driverType : driverOrder) {
             hr = D3D11CreateDevice(
                 nullptr,
-                D3D_DRIVER_TYPE_WARP,
+                driverType,
                 nullptr,
                 flags,
                 levels,
@@ -78,10 +72,16 @@ public:
                 d3dDevice_.ReleaseAndGetAddressOf(),
                 &level,
                 d3dContext_.ReleaseAndGetAddressOf());
-            if (FAILED(hr)) {
-                WriteLogF(L"Auth screen D3D11CreateDevice failed hr=0x%08X", hr);
-                return false;
+            if (SUCCEEDED(hr)) {
+                d3dDriverType_ = driverType;
+                break;
             }
+            WriteLogF(L"Auth screen D3D11CreateDevice %s failed hr=0x%08X",
+                DriverTypeName(driverType), hr);
+        }
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D3D11CreateDevice failed for all drivers hr=0x%08X", hr);
+            return false;
         }
 
         hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf());
@@ -168,8 +168,9 @@ public:
         }
 
         CreateTextFormats();
-        WriteLogF(L"Auth screen initialized %.0fx%.0f view, %ux%u backbuffer, scale=%.3f featureLevel=0x%X",
-            width_, height_, renderWidthPx_, renderHeightPx_, displayScale_, static_cast<unsigned int>(level));
+        WriteLogF(L"Auth screen initialized %.0fx%.0f view, %ux%u backbuffer, scale=%.3f driver=%s featureLevel=0x%X",
+            width_, height_, renderWidthPx_, renderHeightPx_, displayScale_,
+            DriverTypeName(d3dDriverType_), static_cast<unsigned int>(level));
         return true;
     }
 
@@ -220,6 +221,10 @@ public:
             hr = swapChain_->Present(1, 0);
             if (FAILED(hr)) {
                 WriteLogF(L"Auth screen Present failed hr=0x%08X", hr);
+            } else if (!presentOkLogged_) {
+                presentOkLogged_ = true;
+                WriteLogF(L"Auth screen Present OK driver=%s backbuffer=%ux%u",
+                    DriverTypeName(d3dDriverType_), renderWidthPx_, renderHeightPx_);
             }
             ProcessAuthUiEvents();
         };
@@ -860,6 +865,23 @@ private:
     float displayScale_ = 1.0f;
     UINT renderWidthPx_ = 1280;
     UINT renderHeightPx_ = 720;
+    D3D_DRIVER_TYPE d3dDriverType_ = D3D_DRIVER_TYPE_UNKNOWN;
+    bool presentOkLogged_ = false;
+
+    static const wchar_t* DriverTypeName(D3D_DRIVER_TYPE type) {
+        switch (type) {
+        case D3D_DRIVER_TYPE_HARDWARE: return L"hardware";
+        case D3D_DRIVER_TYPE_WARP: return L"warp";
+        case D3D_DRIVER_TYPE_REFERENCE: return L"reference";
+        default: return L"unknown";
+        }
+    }
+
+    static bool IsXboxOneGraphicsRuntime() {
+        wchar_t value[32] = {};
+        const DWORD len = GetEnvironmentVariableW(L"MC_GRAPHICS_RUNTIME", value, ARRAYSIZE(value));
+        return len > 0 && len < ARRAYSIZE(value) && _wcsicmp(value, L"xboxone") == 0;
+    }
 
     static float ReadDisplayScale() {
         wchar_t value[32] = {};
