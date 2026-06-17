@@ -487,6 +487,9 @@ static int g_remote_mouse_log_count = 0;
 static volatile LONG g_remote_mouse_seen = 0;
 static volatile LONG g_remote_mouse_server_started = 0;
 static double g_remote_mouse_wheel_y = 0.0;
+static volatile LONG g_last_companion_tick = 0;     
+static bool g_mouse_active_latched = false;         
+static const DWORD kMouseCompanionTimeoutMs = 3000; 
 static int g_reportedMode = GLFW_CURSOR_DISABLED;
 static int g_width = 1920;
 static volatile LONG g_processing_events = 0;
@@ -519,6 +522,9 @@ static bool AnyMouseButtonDown();
 static void QueueRemoteMouseButton(int buttonBit, int value, int& buttons, int& changes);
 static void DrainRemoteMouseInput();
 static void StartRemoteMouseServer();
+static void MarkMouseCompanionSeen();
+static bool MouseCompanionActive();
+static void FlushMouseButtonsForDeactivate();
 static int SyntheticScancodeForKey(int key);
 static void SetControllerKeyState(int key, bool down);
 static void ReleaseControllerKeys();
@@ -1741,7 +1747,7 @@ static double CurrentPointerScaleY() {
 static void DispatchCursorEnter(bool entered) {
     if (g_cursor_inside == entered) return;
     g_cursor_inside = entered;
-    if (g_cursorenter_cb) {
+    if (g_cursorenter_cb && MouseCompanionActive()) {
         g_cursorenter_cb((GLFWwindow*)&g_fake_window, entered ? GLFW_TRUE : GLFW_FALSE);
     }
 }
@@ -1770,7 +1776,7 @@ static void DispatchCursorPos(double x, double y) {
     }
 
     DispatchCursorEnter(true);
-    if (g_cursorpos_cb) {
+    if (g_cursorpos_cb && MouseCompanionActive()) {
         g_cursorpos_cb((GLFWwindow*)&g_fake_window, g_cursor_x, g_cursor_y);
     }
 }
@@ -1885,7 +1891,7 @@ static void DispatchMouseAbsolute(double x, double y) {
     }
 }
 static void FireRemoteMouseButtonCallback(int button, int action) {
-    if (g_mousebutton_cb) {
+    if (g_mousebutton_cb && MouseCompanionActive()) {
         const int mods = CurrentGlfwMods();
         g_mousebutton_cb((GLFWwindow*)&g_fake_window, button, action, mods);
     }
@@ -1913,6 +1919,24 @@ static bool AnyMouseButtonDown() {
         if (g_mouse_state[i]) return true;
     }
     return false;
+}
+static void MarkMouseCompanionSeen() {
+    InterlockedExchange(&g_last_companion_tick, (LONG)GetTickCount());
+}
+static bool MouseCompanionActive() {
+    const LONG last = InterlockedCompareExchange(&g_last_companion_tick, 0, 0);
+    if (last == 0) return false;
+    return (DWORD)(GetTickCount() - (DWORD)last) <= kMouseCompanionTimeoutMs;
+}
+static void FlushMouseButtonsForDeactivate() {
+    for (int i = 0; i < (int)sizeof(g_mouse_state); ++i) {
+        if (g_mouse_state[i]) {
+            g_mouse_state[i] = GLFW_RELEASE;
+            if (g_mousebutton_cb) {
+                g_mousebutton_cb((GLFWwindow*)&g_fake_window, i, GLFW_RELEASE, CurrentGlfwMods());
+            }
+        }
+    }
 }
 static void QueueRemoteMouseButton(int buttonBit, int value, int& buttons, int& changes) {
     if (value < 0) return;
@@ -1951,7 +1975,7 @@ static void DrainRemoteMouseInput() {
     } else if (dx != 0.0 || dy != 0.0) {
         DispatchMouseDelta(dx, dy);
     }
-    if (wheelY != 0.0 && g_scroll_cb) {
+    if (wheelY != 0.0 && g_scroll_cb && MouseCompanionActive()) {
         g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, wheelY);
     }
 
@@ -2062,6 +2086,7 @@ static void StartRemoteMouseServer() {
                 }
                 buf[len] = 0;
                 RememberMouseRelayStatusAddress(from);
+                MarkMouseCompanionSeen();
 
                 if (strcmp(buf, "hello") == 0 || strcmp(buf, "ping") == 0) {
                     char ack[160] = {};
@@ -2310,7 +2335,7 @@ static void HandlePointerEvent(IPointerEventArgs* args, PointerDispatchKind kind
             }
         }
 
-        if (kind == PointerDispatchWheel && g_scroll_cb) {
+        if (kind == PointerDispatchWheel && g_scroll_cb && MouseCompanionActive()) {
             INT32 wheelDelta = 0;
             boolean horizontal = false;
             props->get_IsHorizontalMouseWheel(&horizontal);
@@ -2370,17 +2395,29 @@ static void PollCoreWindowPointerPosition() {
         ShimLog("Pointer position poll cursor=%.1f,%.1f", g_cursor_x, g_cursor_y);
     }
 }
+static unsigned int g_lastSyncedGameInputButtons = 0;
 static void SyncGameInputMouseButtons(GameInputMouseButtons buttons) {
-    SetMouseButtonState(GLFW_MOUSE_BUTTON_LEFT,
-        (buttons & GameInputMouseLeftButton) ? GLFW_PRESS : GLFW_RELEASE, true);
-    SetMouseButtonState(GLFW_MOUSE_BUTTON_RIGHT,
-        (buttons & GameInputMouseRightButton) ? GLFW_PRESS : GLFW_RELEASE, true);
-    SetMouseButtonState(GLFW_MOUSE_BUTTON_MIDDLE,
-        (buttons & GameInputMouseMiddleButton) ? GLFW_PRESS : GLFW_RELEASE, true);
-    SetMouseButtonState(GLFW_MOUSE_BUTTON_4,
-        (buttons & GameInputMouseButton4) ? GLFW_PRESS : GLFW_RELEASE, true);
-    SetMouseButtonState(GLFW_MOUSE_BUTTON_5,
-        (buttons & GameInputMouseButton5) ? GLFW_PRESS : GLFW_RELEASE, true);
+
+    const unsigned int now = (unsigned int)buttons;
+    const unsigned int changed = now ^ g_lastSyncedGameInputButtons;
+    g_lastSyncedGameInputButtons = now;
+    if (!changed) return;
+
+    if (changed & GameInputMouseLeftButton)
+        SetMouseButtonState(GLFW_MOUSE_BUTTON_LEFT,
+            (now & GameInputMouseLeftButton) ? GLFW_PRESS : GLFW_RELEASE, true);
+    if (changed & GameInputMouseRightButton)
+        SetMouseButtonState(GLFW_MOUSE_BUTTON_RIGHT,
+            (now & GameInputMouseRightButton) ? GLFW_PRESS : GLFW_RELEASE, true);
+    if (changed & GameInputMouseMiddleButton)
+        SetMouseButtonState(GLFW_MOUSE_BUTTON_MIDDLE,
+            (now & GameInputMouseMiddleButton) ? GLFW_PRESS : GLFW_RELEASE, true);
+    if (changed & GameInputMouseButton4)
+        SetMouseButtonState(GLFW_MOUSE_BUTTON_4,
+            (now & GameInputMouseButton4) ? GLFW_PRESS : GLFW_RELEASE, true);
+    if (changed & GameInputMouseButton5)
+        SetMouseButtonState(GLFW_MOUSE_BUTTON_5,
+            (now & GameInputMouseButton5) ? GLFW_PRESS : GLFW_RELEASE, true);
 }
 static void PollGameInputMouse() {
     if (!EnsureGameInput()) return;
@@ -2428,7 +2465,7 @@ static void PollGameInputMouse() {
     if (dx || dy) {
         DispatchMouseDelta(ClampInt64ToInt(dx), ClampInt64ToInt(dy));
     }
-    if ((wheelX || wheelY) && g_scroll_cb) {
+    if ((wheelX || wheelY) && g_scroll_cb && MouseCompanionActive()) {
         g_scroll_cb((GLFWwindow*)&g_fake_window, (double)wheelX, (double)wheelY);
     }
 
@@ -2889,12 +2926,21 @@ extern "C" __declspec(dllexport) void glfwPollEvents(void) {
             ShimLog("Skipping ProcessEvents off dispatcher thread hr=0x%08X access=%d", accessHr, hasDispatcherAccess ? 1 : 0);
         }
     }
-    DrainRemoteMouseInput();
-    PollGameInputMouse();
+    const bool mouseCompanionActive = MouseCompanionActive();
+    if (!mouseCompanionActive && g_mouse_active_latched) {
+      
+        FlushMouseButtonsForDeactivate();
+    }
+    g_mouse_active_latched = mouseCompanionActive;
+
+    if (mouseCompanionActive) {
+        DrainRemoteMouseInput();
+        PollGameInputMouse();
+    }
     if (g_controller_bridge_enabled) {
         PollGameInputGamepad(true);
     }
-    if (!g_gamepad_present) {
+    if (mouseCompanionActive && !g_gamepad_present) {
         PollCoreWindowPointerPosition();
     }
     RefreshWindowMetrics(true);
@@ -2904,9 +2950,7 @@ extern "C" __declspec(dllexport) void glfwWaitEvents(void) {
         ++g_wait_log_count;
         ShimLog("glfwWaitEvents #%d", g_wait_log_count);
     }
-    // UWP does not expose GLFW's native wait semantics cleanly here.
-    // Blocking on the dispatcher can stall Minecraft on a black screen,
-    // so emulate a brief wait and then poll.
+
     Sleep(1);
     glfwPollEvents();
 }
