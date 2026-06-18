@@ -41,9 +41,17 @@ constexpr double kHeldButtonRefreshSeconds = 1.0 / 20.0;
 constexpr double kConnectProbeSeconds = 0.25;
 constexpr double kConnectTimeoutSeconds = 3.0;
 constexpr double kRenderIntervalSeconds = 1.0 / 60.0;
+constexpr double kTouchScrollRepeatSeconds = 1.0 / 12.0;
 constexpr float kMenuCoordinateScale = 0.5f;
 constexpr float kDebugGlyphWidth = 8.0f;
 constexpr float kDebugGlyphHeight = 8.0f;
+constexpr float kTouchScrollStep = 1.0f;
+
+#ifdef BANDIT_MOUSE_RELAY_ANDROID
+constexpr bool kTouchLayout = true;
+#else
+constexpr bool kTouchLayout = false;
+#endif
 
 enum class RelayMode {
     Gameplay,
@@ -64,6 +72,10 @@ struct Button {
     SDL_FRect rect{};
     std::string label;
     UiAction action = UiAction::None;
+    int mouseButtonIndex = -1;
+    float scrollStep = 0.0f;
+    std::string inputText;
+    bool backspace = false;
 };
 
 static float Clamp(float value, float low, float high) {
@@ -469,7 +481,7 @@ public:
             HandleFingerButton(event);
             return;
         case SDL_EVENT_FINGER_MOTION:
-            if (!enteringIp_) {
+            if (!enteringIp_ && !IsTouchControlFinger(event.tfinger.fingerID)) {
                 AddMotion(event.tfinger.dx * static_cast<float>(windowWidth_), event.tfinger.dy * static_cast<float>(windowHeight_));
             }
             return;
@@ -481,6 +493,7 @@ public:
     void Tick() {
         PollStatus();
         SendConnectionProbe();
+        RepeatHeldTouchScroll();
         SendPendingPackets();
     }
 
@@ -511,18 +524,88 @@ private:
         std::vector<Button> buttons;
 
         if (enteringIp_) {
-            const float width = 156.0f;
-            const float height = 34.0f;
-            const float gap = 16.0f;
+            const float width = kTouchLayout ? 176.0f : 156.0f;
+            const float height = kTouchLayout ? 46.0f : 34.0f;
+            const float gap = kTouchLayout ? 18.0f : 16.0f;
             const float total = (width * 2.0f) + gap;
             const float x = (uiWidth - total) * 0.5f;
-            const float y = IpScreenTop(uiHeight) + 168.0f;
+            const float top = IpScreenTop(uiHeight);
+
+            if (kTouchLayout) {
+                const float keyWidth = 78.0f;
+                const float keyHeight = 44.0f;
+                const float keyGap = 8.0f;
+                const float keyTotal = (keyWidth * 3.0f) + (keyGap * 2.0f);
+                const float keyX = (uiWidth - keyTotal) * 0.5f;
+                const float keyY = top + 150.0f;
+                const std::array<const char*, 12> labels{
+                    "1", "2", "3",
+                    "4", "5", "6",
+                    "7", "8", "9",
+                    ".", "0", "Del"
+                };
+
+                for (size_t i = 0; i < labels.size(); ++i) {
+                    const float col = static_cast<float>(i % 3);
+                    const float row = static_cast<float>(i / 3);
+                    const char* label = labels[i];
+                    Button key{};
+                    key.rect = SDL_FRect{
+                        keyX + (col * (keyWidth + keyGap)),
+                        keyY + (row * (keyHeight + keyGap)),
+                        keyWidth,
+                        keyHeight
+                    };
+                    key.label = label;
+                    if (std::strcmp(label, "Del") == 0) {
+                        key.backspace = true;
+                    } else {
+                        key.inputText = label;
+                    }
+                    buttons.push_back(key);
+                }
+            }
+
+            const float y = top + (kTouchLayout ? 374.0f : 168.0f);
             buttons.push_back({
                 SDL_FRect{ x, y, width, height },
                 connecting_ ? "Checking" : "Connect",
                 connecting_ ? UiAction::None : UiAction::Connect
             });
             buttons.push_back({ SDL_FRect{ x + width + gap, y, width, height }, hostSet_ || connecting_ ? "Cancel" : "Quit", UiAction::CancelIp });
+            return buttons;
+        }
+
+        if (kTouchLayout) {
+            const float margin = 16.0f;
+            const float utilityWidth = 118.0f;
+            const float utilityHeight = 44.0f;
+            const float utilityGap = 10.0f;
+            const float utilityTotal = (utilityWidth * 4.0f) + (utilityGap * 3.0f);
+            float utilityX = std::max(margin, (uiWidth - utilityTotal) * 0.5f);
+            const float utilityY = uiHeight - utilityHeight - margin;
+
+            buttons.push_back({ SDL_FRect{ utilityX, utilityY, utilityWidth, utilityHeight }, "Change IP", UiAction::ChangeIp });
+            utilityX += utilityWidth + utilityGap;
+            buttons.push_back({ SDL_FRect{ utilityX, utilityY, utilityWidth, utilityHeight }, "Toggle", UiAction::ToggleMode });
+            utilityX += utilityWidth + utilityGap;
+            buttons.push_back({ SDL_FRect{ utilityX, utilityY, utilityWidth, utilityHeight }, "Release", UiAction::ReleaseButtons });
+            utilityX += utilityWidth + utilityGap;
+            buttons.push_back({ SDL_FRect{ utilityX, utilityY, utilityWidth, utilityHeight }, "Quit", UiAction::Quit });
+
+            const float padWidth = 132.0f;
+            const float padHeight = 48.0f;
+            const float padGap = 10.0f;
+            const float padX = uiWidth - padWidth - margin;
+            float padY = std::max(172.0f, utilityY - ((padHeight + padGap) * 4.0f) - 10.0f);
+
+            buttons.push_back({ SDL_FRect{ padX, padY, padWidth, padHeight }, "Hold L", UiAction::None, 0, 0.0f });
+            padY += padHeight + padGap;
+            buttons.push_back({ SDL_FRect{ padX, padY, padWidth, padHeight }, "Hold R", UiAction::None, 1, 0.0f });
+            padY += padHeight + padGap;
+            buttons.push_back({ SDL_FRect{ padX, padY, padWidth, padHeight }, "Wheel Up", UiAction::None, -1, kTouchScrollStep });
+            padY += padHeight + padGap;
+            buttons.push_back({ SDL_FRect{ padX, padY, padWidth, padHeight }, "Wheel Down", UiAction::None, -1, -kTouchScrollStep });
             return buttons;
         }
 
@@ -543,7 +626,7 @@ private:
         return buttons;
     }
 
-    UiAction HitActionAtUi(float uiX, float uiY) const {
+    std::optional<Button> HitButtonAtUi(float uiX, float uiY) const {
         const float scale = UiScale();
         const float uiWidth = static_cast<float>(windowWidth_) / scale;
         const float uiHeight = static_cast<float>(windowHeight_) / scale;
@@ -551,16 +634,26 @@ private:
         for (const Button& button : BuildButtons(uiWidth, uiHeight)) {
             if (uiX >= button.rect.x && uiX <= button.rect.x + button.rect.w &&
                 uiY >= button.rect.y && uiY <= button.rect.y + button.rect.h) {
-                return button.action;
+                return button;
             }
         }
 
-        return UiAction::None;
+        return std::nullopt;
+    }
+
+    UiAction HitActionAtUi(float uiX, float uiY) const {
+        const std::optional<Button> button = HitButtonAtUi(uiX, uiY);
+        return button ? button->action : UiAction::None;
+    }
+
+    std::optional<Button> HitButton(float windowX, float windowY) const {
+        const float scale = UiScale();
+        return HitButtonAtUi(windowX / scale, windowY / scale);
     }
 
     UiAction HitAction(float windowX, float windowY) const {
-        const float scale = UiScale();
-        return HitActionAtUi(windowX / scale, windowY / scale);
+        const std::optional<Button> button = HitButton(windowX, windowY);
+        return button ? button->action : UiAction::None;
     }
 
     UiAction HitActionAtRelayCursor() const {
@@ -623,6 +716,27 @@ private:
         }
     }
 
+    bool ExecuteButtonRelease(const Button& button) {
+        if (button.backspace) {
+            if (!ipBuffer_.empty()) {
+                ipBuffer_.pop_back();
+            }
+            return true;
+        }
+
+        if (!button.inputText.empty()) {
+            AppendIpText(button.inputText.c_str());
+            return true;
+        }
+
+        if (button.action != UiAction::None) {
+            ExecuteAction(button.action);
+            return true;
+        }
+
+        return false;
+    }
+
     void HandleKey(SDL_Keycode key) {
         if (enteringIp_) {
             if (connecting_) {
@@ -652,19 +766,23 @@ private:
     }
 
     void HandleMouseButton(const SDL_Event& event) {
-        UiAction action = UiAction::None;
+        std::optional<Button> hit;
+        UiAction relayCursorAction = UiAction::None;
         if (enteringIp_ || mode_ == RelayMode::Menu) {
-            action = HitAction(event.button.x, event.button.y);
-            if (action == UiAction::None) {
-                action = HitActionAtRelayCursor();
+            hit = HitButton(event.button.x, event.button.y);
+            if (!hit) {
+                relayCursorAction = HitActionAtRelayCursor();
             }
         }
 
-        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && action != UiAction::None) {
-            ExecuteAction(action);
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && hit && ExecuteButtonRelease(*hit)) {
             return;
         }
-        if (action != UiAction::None || enteringIp_) {
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && relayCursorAction != UiAction::None) {
+            ExecuteAction(relayCursorAction);
+            return;
+        }
+        if (hit || relayCursorAction != UiAction::None || enteringIp_) {
             return;
         }
 
@@ -677,10 +795,80 @@ private:
     void HandleFingerButton(const SDL_Event& event) {
         const float x = event.tfinger.x * static_cast<float>(windowWidth_);
         const float y = event.tfinger.y * static_cast<float>(windowHeight_);
-        const UiAction action = HitAction(x, y);
-        if (event.type == SDL_EVENT_FINGER_UP && action != UiAction::None) {
-            ExecuteAction(action);
+        const std::optional<Button> hit = HitButton(x, y);
+        const SDL_FingerID finger = event.tfinger.fingerID;
+
+        if (event.type == SDL_EVENT_FINGER_DOWN) {
+            if (!hit) {
+                return;
+            }
+
+            if (hit->backspace || !hit->inputText.empty()) {
+                ExecuteButtonRelease(*hit);
+                return;
+            }
+
+            if (hit->mouseButtonIndex >= 0 && hit->mouseButtonIndex < static_cast<int>(buttonState_.size())) {
+                const size_t index = static_cast<size_t>(hit->mouseButtonIndex);
+                buttonState_[index] = 1;
+                touchButtonFingers_[index] = finger;
+                return;
+            }
+
+            if (hit->scrollStep != 0.0f) {
+                pendingScroll_ += hit->scrollStep;
+                touchScrollFinger_ = finger;
+                touchScrollStep_ = hit->scrollStep;
+                lastTouchScrollRepeat_ = NowSeconds();
+                return;
+            }
+
+            if (hit->action != UiAction::None) {
+                touchActionFinger_ = finger;
+                touchAction_ = hit->action;
+            }
+            return;
         }
+
+        if (event.type == SDL_EVENT_FINGER_UP) {
+            for (size_t i = 0; i < touchButtonFingers_.size(); ++i) {
+                if (touchButtonFingers_[i] && *touchButtonFingers_[i] == finger) {
+                    buttonState_[i] = 0;
+                    touchButtonFingers_[i].reset();
+                    return;
+                }
+            }
+
+            if (touchScrollFinger_ && *touchScrollFinger_ == finger) {
+                touchScrollFinger_.reset();
+                touchScrollStep_ = 0.0f;
+                return;
+            }
+
+            if (touchActionFinger_ && *touchActionFinger_ == finger) {
+                const UiAction action = touchAction_;
+                touchActionFinger_.reset();
+                touchAction_ = UiAction::None;
+                if (hit && hit->action == action && action != UiAction::None) {
+                    ExecuteAction(action);
+                }
+            }
+        }
+    }
+
+    bool IsTouchControlFinger(SDL_FingerID finger) const {
+        if (touchActionFinger_ && *touchActionFinger_ == finger) {
+            return true;
+        }
+        if (touchScrollFinger_ && *touchScrollFinger_ == finger) {
+            return true;
+        }
+        for (const std::optional<SDL_FingerID>& buttonFinger : touchButtonFingers_) {
+            if (buttonFinger && *buttonFinger == finger) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void AppendIpText(const char* text) {
@@ -918,6 +1106,18 @@ private:
         }
     }
 
+    void RepeatHeldTouchScroll() {
+        if (!touchScrollFinger_ || touchScrollStep_ == 0.0f || enteringIp_) {
+            return;
+        }
+
+        const double now = NowSeconds();
+        if (now - lastTouchScrollRepeat_ >= kTouchScrollRepeatSeconds) {
+            pendingScroll_ += touchScrollStep_;
+            lastTouchScrollRepeat_ = now;
+        }
+    }
+
     std::string FormatPacket(float dx, float dy, const std::array<int, 5>& buttons, float scroll) const {
         char buffer[160]{};
         std::snprintf(
@@ -1040,6 +1240,11 @@ private:
 
     void ReleaseAllButtons() {
         buttonState_.fill(0);
+        for (std::optional<SDL_FingerID>& buttonFinger : touchButtonFingers_) {
+            buttonFinger.reset();
+        }
+        touchScrollFinger_.reset();
+        touchScrollStep_ = 0.0f;
         if (transport_.IsOpen()) {
             const std::array<int, 5> released{ 0, 0, 0, 0, 0 };
             if (transport_.Send(FormatPacket(0.0f, 0.0f, released, 0.0f))) {
@@ -1063,9 +1268,19 @@ private:
     }
 
     void DrawButton(const Button& button) {
-        SDL_SetRenderDrawColor(renderer_, 32, 43, 58, 255);
+        const bool active = (button.mouseButtonIndex >= 0 &&
+            button.mouseButtonIndex < static_cast<int>(buttonState_.size()) &&
+            buttonState_[static_cast<size_t>(button.mouseButtonIndex)] != 0) ||
+            (button.scrollStep != 0.0f && touchScrollStep_ == button.scrollStep) ||
+            (button.action != UiAction::None && touchAction_ == button.action);
+
+        if (active) {
+            SDL_SetRenderDrawColor(renderer_, 58, 92, 112, 255);
+        } else {
+            SDL_SetRenderDrawColor(renderer_, 32, 43, 58, 255);
+        }
         SDL_RenderFillRect(renderer_, &button.rect);
-        SDL_SetRenderDrawColor(renderer_, 105, 183, 204, 255);
+        SDL_SetRenderDrawColor(renderer_, active ? 147 : 105, active ? 221 : 183, active ? 232 : 204, 255);
         SDL_RenderRect(renderer_, &button.rect);
 
         const float textX = button.rect.x + ((button.rect.w - TextWidth(button.label)) * 0.5f);
@@ -1074,7 +1289,7 @@ private:
     }
 
     float IpScreenTop(float uiHeight) const {
-        return (uiHeight - 216.0f) * 0.5f;
+        return (uiHeight - (kTouchLayout ? 236.0f : 216.0f)) * 0.5f;
     }
 
     void RenderIpScreen(float uiWidth, float uiHeight) {
@@ -1101,7 +1316,7 @@ private:
 
         const std::string hint = connecting_
             ? "Waiting for MODE/SYNC reply on UDP 7332. Esc cancels."
-            : "Keyboard: Enter confirm, Backspace edit, Esc cancel";
+            : (kTouchLayout ? "Use the keypad below, then tap Connect" : "Keyboard: Enter confirm, Backspace edit, Esc cancel");
         DrawTextCentered(centerX, box.y + 50.0f, hint, SDL_Color{ 145, 158, 174, 255 });
 
         for (const Button& button : BuildButtons(uiWidth, uiHeight)) {
@@ -1118,7 +1333,7 @@ private:
         DrawText(18.0f, 62.0f, "Mouse: " + ModeName(mode_) + "  App: " + appMode + "  UDP: " + network, SDL_Color{ 218, 229, 241, 255 });
         DrawText(18.0f, 82.0f, "Packets: sent=" + std::to_string(sentPackets_) + " status=" + std::to_string(statusPackets_), SDL_Color{ 174, 187, 202, 255 });
         DrawText(18.0f, 102.0f, "Window: " + std::to_string(windowWidth_) + "x" + std::to_string(windowHeight_) + " -> menu " + std::to_string((int)MenuTargetWidth()) + "x" + std::to_string((int)MenuTargetHeight()) + " raw " + std::to_string((int)targetWidth_) + "x" + std::to_string((int)targetHeight_), SDL_Color{ 174, 187, 202, 255 });
-        DrawText(18.0f, 122.0f, "Keys: F3 change IP, F8 quit, F9 toggle local mode", SDL_Color{ 145, 158, 174, 255 });
+        DrawText(18.0f, 122.0f, kTouchLayout ? "Touch: drag empty space, hold L/R with another finger, wheel pads scroll" : "Keys: F3 change IP, F8 quit, F9 toggle local mode", SDL_Color{ 145, 158, 174, 255 });
         DrawText(18.0f, 142.0f, "Last: " + lastStatus_, SDL_Color{ 145, 158, 174, 255 });
 
         for (const Button& button : BuildButtons(uiWidth, uiHeight)) {
@@ -1166,17 +1381,23 @@ private:
     std::optional<RelayMode> appMode_;
     std::array<int, 5> buttonState_{ 0, 0, 0, 0, 0 };
     std::array<int, 5> lastSentButtons_{ -1, -1, -1, -1, -1 };
+    std::array<std::optional<SDL_FingerID>, 5> touchButtonFingers_{};
+    std::optional<SDL_FingerID> touchActionFinger_;
+    std::optional<SDL_FingerID> touchScrollFinger_;
+    UiAction touchAction_ = UiAction::None;
 
     float virtualX_ = kTargetWidth * kMenuCoordinateScale * 0.5f;
     float virtualY_ = kTargetHeight * kMenuCoordinateScale * 0.5f;
     float accumDx_ = 0.0f;
     float accumDy_ = 0.0f;
     float pendingScroll_ = 0.0f;
+    float touchScrollStep_ = 0.0f;
     bool motionPending_ = false;
     double connectStart_ = 0.0;
     double lastConnectProbe_ = 0.0;
     double lastMotionSend_ = 0.0;
     double lastHeldButtonRefresh_ = 0.0;
+    double lastTouchScrollRepeat_ = 0.0;
     double lastPing_ = 0.0;
     uint64_t sentPackets_ = 0;
     uint64_t statusPackets_ = 0;

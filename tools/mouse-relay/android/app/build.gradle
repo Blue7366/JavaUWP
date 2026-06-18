@@ -5,19 +5,31 @@ plugins {
 def sdlVersion = "3.4.10"
 def sdlAarName = "SDL3-${sdlVersion}.aar"
 def sdlAar = layout.projectDirectory.file("libs/${sdlAarName}")
+def sdlAndroidZipName = "SDL3-devel-${sdlVersion}-android.zip"
+def sdlAndroidZip = layout.buildDirectory.file("downloads/${sdlAndroidZipName}")
 
 tasks.register("downloadSdlAar") {
     outputs.file(sdlAar)
     doLast {
         def target = sdlAar.asFile
+        def archive = sdlAndroidZip.get().asFile
         target.parentFile.mkdirs()
         if (!target.exists()) {
-            def url = "https://github.com/libsdl-org/SDL/releases/download/release-${sdlVersion}/${sdlAarName}"
+            archive.parentFile.mkdirs()
+            def url = "https://github.com/libsdl-org/SDL/releases/download/release-${sdlVersion}/${sdlAndroidZipName}"
             logger.lifecycle("Downloading ${url}")
             new URI(url).toURL().withInputStream { input ->
-                target.withOutputStream { output ->
+                archive.withOutputStream { output ->
                     output << input
                 }
+            }
+            copy {
+                from zipTree(archive)
+                include sdlAarName
+                into target.parentFile
+            }
+            if (!target.exists()) {
+                throw new GradleException("${sdlAarName} was not found in ${sdlAndroidZipName}")
             }
         }
     }
@@ -26,6 +38,7 @@ tasks.register("downloadSdlAar") {
 android {
     namespace "dev.bandit.mouserelay"
     compileSdk 36
+    ndkVersion "28.2.13676358"
 
     defaultConfig {
         applicationId "dev.bandit.mouserelay"
@@ -59,4 +72,3 @@ preBuild.dependsOn("downloadSdlAar")
 dependencies {
     implementation files("libs/${sdlAarName}")
 }
-

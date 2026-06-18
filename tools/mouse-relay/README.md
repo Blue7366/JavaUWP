@@ -32,7 +32,12 @@ dist/mouse-relay/BanditMouseRelay-nightly-win-x64.zip
 
 ## Android Build
 
-The Android project uses the SDL3 Android AAR and Gradle/NDK/CMake.
+The Android project uses the SDL3 Android AAR and Gradle/NDK/CMake. Install
+the Android SDK command-line tools, then install the same packages used by CI:
+
+```powershell
+sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+```
 
 ```powershell
 cd tools\mouse-relay\android
@@ -47,9 +52,14 @@ tools/mouse-relay/android/app/build/outputs/apk/debug/app-debug.apk
 
 ## Controls
 
-- Enter Xbox IP on launch.
+- Enter Xbox IP on launch. Android shows an in-app numeric keypad so it does
+  not depend on the system keyboard.
 - Connect waits for the launcher shim to answer before mouse capture starts.
 - `F3` changes the Xbox IP.
 - `F8` quits.
 - `F9` toggles the local relay mode for troubleshooting.
 - On-screen buttons provide the same actions for touch devices.
+- Android: the app stays in landscape immersive mode. Drag empty space to move
+  the mouse, hold `Hold L` or `Hold R` with one finger, and drag with another
+  finger for held-click actions such as breaking blocks. `Wheel Up` and
+  `Wheel Down` repeat while held.
