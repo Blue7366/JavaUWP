@@ -12,6 +12,8 @@ public final class BanditMouseCursorOverlay {
             return;
         }
 
+        context.method_71048();
+
         context.method_25294(mouseX - 3, mouseY - 3, mouseX + 4, mouseY + 4, 0x66000000);
         context.method_25294(mouseX - 5, mouseY, mouseX + 6, mouseY + 1, 0xFFFFFFFF);
         context.method_25294(mouseX, mouseY - 5, mouseX + 1, mouseY + 6, 0xFFFFFFFF);
