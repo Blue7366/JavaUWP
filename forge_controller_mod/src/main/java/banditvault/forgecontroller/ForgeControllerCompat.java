@@ -1,6 +1,7 @@
 package banditvault.forgecontroller;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.platform.Window;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import net.minecraft.client.KeyMapping;
@@ -43,6 +44,14 @@ public final class ForgeControllerCompat {
     private static long lastLookNanos;
     private static long renderFrameActiveNanos;
     private static boolean loggedLookApplied;
+    private static boolean followingCompanion;
+    private static Object lastCompanionScreen;
+    private static double lastCompanionMouseX;
+    private static double lastCompanionMouseY;
+    private static long companionActiveUntilNanos;
+
+    private static final long COMPANION_IDLE_NANOS = 500_000_000L;
+    private static final double COMPANION_MOVE_EPSILON = 0.5;
 
     private ForgeControllerCompat() {
     }
@@ -75,6 +84,7 @@ public final class ForgeControllerCompat {
                 releaseGameplayKeys(client);
                 crouchToggled = false;
                 sprintToggled = false;
+                followingCompanion = false;
                 active = false;
             }
             return;
@@ -92,6 +102,7 @@ public final class ForgeControllerCompat {
             releaseGameplayKeys(client);
             tickScreen(client, client.f_91080_);
         } else {
+            followingCompanion = false;
             tickGameplay(client);
         }
 
@@ -125,7 +136,7 @@ public final class ForgeControllerCompat {
     }
 
     public static void renderCursor(Screen screen, GuiGraphics graphics) {
-        if (!active || screen == null || graphics == null || cursorX < 0.0 || cursorY < 0.0) {
+        if (!active || followingCompanion || screen == null || graphics == null || cursorX < 0.0 || cursorY < 0.0) {
             return;
         }
         int x = (int) Math.round(cursorX);
@@ -253,12 +264,16 @@ public final class ForgeControllerCompat {
         float lx = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
         float ly = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
         float ry = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
-        double dx = shapedCursorAxis(lx, settings.cursorDeadzone);
-        double dy = shapedCursorAxis(ly, settings.cursorDeadzone);
 
-        cursorX = clamp(cursorX + dx * settings.cursorSpeed, 0.0, Math.max(1, screen.f_96543_ - 1));
-        cursorY = clamp(cursorY + dy * settings.cursorSpeed, 0.0, Math.max(1, screen.f_96544_ - 1));
-        invokeScreenMouseMoved(screen, cursorX, cursorY);
+        if (updateCompanion(client, screen)) {
+            followCompanionCursor(client, screen);
+        } else {
+            double dx = shapedCursorAxis(lx, settings.cursorDeadzone);
+            double dy = shapedCursorAxis(ly, settings.cursorDeadzone);
+            cursorX = clamp(cursorX + dx * settings.cursorSpeed, 0.0, Math.max(1, screen.f_96543_ - 1));
+            cursorY = clamp(cursorY + dy * settings.cursorSpeed, 0.0, Math.max(1, screen.f_96544_ - 1));
+            invokeScreenMouseMoved(screen, cursorX, cursorY);
+        }
 
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_BACK)) {
             if (screen instanceof ForgeControllerSettingsScreen) {
@@ -305,6 +320,45 @@ public final class ForgeControllerCompat {
                 scrollCooldown = 5;
             }
         }
+    }
+
+    private static boolean updateCompanion(Minecraft client, Screen screen) {
+        double mouseX;
+        double mouseY;
+        try {
+            mouseX = client.f_91067_.m_91589_();
+            mouseY = client.f_91067_.m_91594_();
+        } catch (Throwable t) {
+            followingCompanion = false;
+            return false;
+        }
+
+        long now = System.nanoTime();
+        if (screen != lastCompanionScreen) {
+            lastCompanionScreen = screen;
+            lastCompanionMouseX = mouseX;
+            lastCompanionMouseY = mouseY;
+        } else if (Math.abs(mouseX - lastCompanionMouseX) > COMPANION_MOVE_EPSILON
+            || Math.abs(mouseY - lastCompanionMouseY) > COMPANION_MOVE_EPSILON) {
+            lastCompanionMouseX = mouseX;
+            lastCompanionMouseY = mouseY;
+            companionActiveUntilNanos = now + COMPANION_IDLE_NANOS;
+        }
+
+        boolean companion = now <= companionActiveUntilNanos;
+        followingCompanion = companion;
+        return companion;
+    }
+
+    private static void followCompanionCursor(Minecraft client, Screen screen) {
+        Window window = client.m_91268_();
+        double rawX = client.f_91067_.m_91589_();
+        double rawY = client.f_91067_.m_91594_();
+        double scaledX = rawX * screen.f_96543_ / Math.max(1.0, window.m_85441_());
+        double scaledY = rawY * screen.f_96544_ / Math.max(1.0, window.m_85442_());
+        cursorX = clamp(scaledX, 0.0, Math.max(1, screen.f_96543_ - 1));
+        cursorY = clamp(scaledY, 0.0, Math.max(1, screen.f_96544_ - 1));
+        invokeScreenMouseMoved(screen, cursorX, cursorY);
     }
 
     private static void applyLook(LocalPlayer player, float rx, float ry, float seconds, ForgeControllerSettings settings) {

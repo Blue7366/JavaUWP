@@ -6,6 +6,7 @@ import net.minecraft.class_310;
 import net.minecraft.class_315;
 import net.minecraft.class_332;
 import net.minecraft.class_465;
+import net.minecraft.class_1041;
 import net.minecraft.class_1713;
 import net.minecraft.class_1735;
 import net.minecraft.class_437;
@@ -32,6 +33,14 @@ public final class BanditControllerCompat {
     private static int scrollCooldown;
     private static boolean crouchToggled;
     private static boolean sprintToggled;
+    private static boolean followingCompanion;
+    private static Object lastCompanionScreen;
+    private static double lastCompanionMouseX;
+    private static double lastCompanionMouseY;
+    private static long companionActiveUntilNanos;
+
+    private static final long COMPANION_IDLE_NANOS = 500_000_000L;
+    private static final double COMPANION_MOVE_EPSILON = 0.5;
 
     private BanditControllerCompat() {
     }
@@ -46,6 +55,7 @@ public final class BanditControllerCompat {
                 releaseGameplayKeys(client);
                 crouchToggled = false;
                 sprintToggled = false;
+                followingCompanion = false;
                 active = false;
             }
             return;
@@ -62,6 +72,7 @@ public final class BanditControllerCompat {
             releaseGameplayKeys(client);
             tickScreen(client, client.field_1755);
         } else {
+            followingCompanion = false;
             tickGameplay(client);
         }
 
@@ -95,7 +106,7 @@ public final class BanditControllerCompat {
     }
 
     public static void renderCursor(class_437 screen, class_332 context) {
-        if (!active || screen == null || context == null || cursorX < 0.0 || cursorY < 0.0) {
+        if (!active || followingCompanion || screen == null || context == null || cursorX < 0.0 || cursorY < 0.0) {
             return;
         }
 
@@ -211,12 +222,16 @@ public final class BanditControllerCompat {
         float lx = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
         float ly = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
         float ry = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
-        double dx = shapedCursorAxis(lx, settings.cursorDeadzone);
-        double dy = shapedCursorAxis(ly, settings.cursorDeadzone);
 
-        cursorX = clamp(cursorX + dx * settings.cursorSpeed, 0.0, Math.max(1, screen.field_22789 - 1));
-        cursorY = clamp(cursorY + dy * settings.cursorSpeed, 0.0, Math.max(1, screen.field_22790 - 1));
-        screen.method_16014(cursorX, cursorY);
+        if (updateCompanion(client, screen)) {
+            followCompanionCursor(client, screen);
+        } else {
+            double dx = shapedCursorAxis(lx, settings.cursorDeadzone);
+            double dy = shapedCursorAxis(ly, settings.cursorDeadzone);
+            cursorX = clamp(cursorX + dx * settings.cursorSpeed, 0.0, Math.max(1, screen.field_22789 - 1));
+            cursorY = clamp(cursorY + dy * settings.cursorSpeed, 0.0, Math.max(1, screen.field_22790 - 1));
+            screen.method_16014(cursorX, cursorY);
+        }
 
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_BACK)) {
             if (screen instanceof BanditControllerSettingsScreen) {
@@ -263,6 +278,45 @@ public final class BanditControllerCompat {
                 scrollCooldown = 5;
             }
         }
+    }
+
+    private static boolean updateCompanion(class_310 client, class_437 screen) {
+        double mouseX;
+        double mouseY;
+        try {
+            mouseX = client.field_1729.method_1603();
+            mouseY = client.field_1729.method_1604();
+        } catch (Throwable t) {
+            followingCompanion = false;
+            return false;
+        }
+
+        long now = System.nanoTime();
+        if (screen != lastCompanionScreen) {
+            lastCompanionScreen = screen;
+            lastCompanionMouseX = mouseX;
+            lastCompanionMouseY = mouseY;
+        } else if (Math.abs(mouseX - lastCompanionMouseX) > COMPANION_MOVE_EPSILON ||
+            Math.abs(mouseY - lastCompanionMouseY) > COMPANION_MOVE_EPSILON) {
+            lastCompanionMouseX = mouseX;
+            lastCompanionMouseY = mouseY;
+            companionActiveUntilNanos = now + COMPANION_IDLE_NANOS;
+        }
+
+        boolean companion = now <= companionActiveUntilNanos;
+        followingCompanion = companion;
+        return companion;
+    }
+
+    private static void followCompanionCursor(class_310 client, class_437 screen) {
+        class_1041 window = client.method_22683();
+        double rawX = client.field_1729.method_1603();
+        double rawY = client.field_1729.method_1604();
+        double scaledX = rawX * screen.field_22789 / Math.max(1.0, window.method_4480());
+        double scaledY = rawY * screen.field_22790 / Math.max(1.0, window.method_4507());
+        cursorX = clamp(scaledX, 0.0, Math.max(1, screen.field_22789 - 1));
+        cursorY = clamp(scaledY, 0.0, Math.max(1, screen.field_22790 - 1));
+        screen.method_16014(cursorX, cursorY);
     }
 
     private static void applyLook(class_746 player, float rx, float ry, float seconds, BanditControllerSettings settings) {
