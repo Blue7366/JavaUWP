@@ -67,10 +67,10 @@ minecraft version + loader + loader version
 
 | Target | State | Notes |
 | --- | --- | --- |
-| `1.21.11 + Fabric 0.19.2` | Supported | Current default target. Base game and Controlify have been tested. |
-| `1.21.1 + Fabric 0.19.2` | Testing | Base game, Controlify, and Cobblemon have been verified. Uses Java 21 for mods that require it. |
-| `1.21.1 + NeoForge 21.1.233` | Experimental | Base game, Controlify, Sodium, JEI, and Modrinth modpack installs have been tested. Uses Java 21. |
-| `1.20.4 + Fabric 0.19.2` | Testing | Base game and Controlify have been tested. Uses Java 21. |
+| `1.21.11 + Fabric 0.19.2` | Supported | Current default target. Base game has been tested. |
+| `1.21.1 + Fabric 0.19.2` | Testing | Base game and Cobblemon have been verified. Uses Java 21 for mods that require it. |
+| `1.21.1 + NeoForge 21.1.233` | Experimental | Base game, Sodium, JEI, and Modrinth modpack installs have been tested. Uses Java 21. |
+| `1.20.4 + Fabric 0.19.2` | Testing | Base game has been tested. Uses Java 21. |
 | `1.20.1 + Fabric 0.19.2` | Testing | Bundled Bandit controller layer. Uses Java 21. Still needs broader testing. |
 | `1.20.1 + Forge 47.4.20` | Experimental | Initial Forge provider with bundled controller mod. Uses Java 21. |
 | `1.19.2 + Fabric 0.14.25` | Testing | Base game and controller support have been tested. Uses Java 21. |
@@ -103,7 +103,7 @@ Other catalog entries (additional Forge versions, older vanilla targets, and fut
 - Initial NeoForge 1.21.1 launch provider support.
 - Experimental Forge 1.20.1 launch provider support.
 - Built in Xbox compatibility mod with Minecraft and mod compatibility fixes.
-- Bundled Xbox controller mods for legacy Fabric targets and Forge 1.20.1.
+- Bundled Xbox controller mods under `controller_mod/` for legacy Fabric targets and Forge 1.20.1.
 
 **Xbox integration**
 
@@ -111,7 +111,7 @@ Other catalog entries (additional Forge versions, older vanilla targets, and fut
 - Mesa based graphics path for Xbox Series consoles.
 - Separate Xbox One graphics runtime path when packaged.
 - GameInput based controller support through the GLFW shim.
-- Bundled Bandit controller layer for `1.16.5`, `1.19.2`, and `1.20.1` Fabric, plus `1.20.1` Forge, where modern controller mods such as Controlify are not the default path.
+- Bundled Bandit controller layer for `1.16.5`, `1.19.2`, and `1.20.1` Fabric, plus `1.20.1` Forge.
 - Shared controller settings at `config/bandit-controller.properties` (deadzones, look speed, toggle crouch/sprint).
 
 **Diagnostics and file access**
@@ -133,15 +133,13 @@ For the best current experience, install recommended mods from the Mods page aft
 For modern Fabric targets:
 
 - Sodium
-- Controlify
 
 For `1.21.1 + NeoForge 21.1.233`:
 
 - Sodium
-- Controlify
 - JEI
 
-For bundled-controller targets (`1.16.5`, `1.19.2`, and `1.20.1` Fabric, plus `1.20.1` Forge), Bandit Launcher includes its own controller support layer instead of Controlify. Press **View/Back** in-game to open Bandit Controller settings. Sodium can still help performance on Fabric, but older Sodium versions may need launcher compatibility settings that are seeded automatically.
+For bundled-controller targets (`1.16.5`, `1.19.2`, and `1.20.1` Fabric, plus `1.20.1` Forge), Bandit Launcher includes its own controller support layer. Press **View/Back** in-game to open Bandit Controller settings. Sodium can still help performance on Fabric, but older Sodium versions may need launcher compatibility settings that are seeded automatically.
 
 Cobblemon has been verified on `1.21.1 + Fabric 0.19.2` using the Java 21 runtime.
 
@@ -285,8 +283,8 @@ To preview or apply cleanup:
 | --- | --- |
 | `MC.Xbox/` | UWP host app: sign in, launcher UI, downloads, profiles, mods, and JVM launch. |
 | `glfw_shim/` | Replacement `glfw.dll` for UWP windowing, input, gamepad state, and EGL. |
-| `compat_mod/` | Fabric compatibility mod for Minecraft, mod, controller, filesystem, and graphics fixes. |
-| `forge_controller_mod/` | Forge 1.20.1 Xbox controller mod (built per Forge target under `runtime/version-mods/`). |
+| `compat_mod/` | Fabric compatibility mod for Minecraft, mod, filesystem, and graphics fixes. |
+| `controller_mod/` | Shared controller core plus Fabric and Forge Xbox controller mods built under `runtime/version-mods/`. |
 | `patch/` | Patched Fabric Loader and securejarhandler classes used by the build. |
 | `scripts/` | Setup, cleanup, asset, patch, manifest, and build helpers. |
 | `config/` | Launch target catalog used by the launcher and build. |

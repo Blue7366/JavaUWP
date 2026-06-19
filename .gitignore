@@ -28,6 +28,7 @@
 *.user
 *.VC.db
 *.VC.opendb
+.vscode/
 
 # Logs and runtime output
 /logs/

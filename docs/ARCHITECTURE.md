@@ -171,8 +171,8 @@ Changing the default target requires updating `scripts/config.ps1` and usually `
 | Path | Role in launch |
 | --- | --- |
 | `glfw_shim/` | Replaces desktop `glfw.dll` behavior for UWP windowing, input, and EGL. |
-| `compat_mod/` | Fabric compatibility mod: filesystem, graphics, and controller fixes per target. |
-| `forge_controller_mod/` | Forge Xbox controller mod built into `runtime/version-mods/<target-id>/`. |
+| `compat_mod/` | Fabric compatibility mod: filesystem, graphics, and sandbox fixes per target. |
+| `controller_mod/` | Shared controller core plus loader-specific controller mods built into `runtime/version-mods/<target-id>/`. |
 | `patch/` | Supplies patched Fabric Loader classes and securejarhandler UWP changes packaged into the APPX. |
 | `mesa-runtime/` | Series console OpenGL translation runtime packaged under `graphics/`. |
 
@@ -182,8 +182,8 @@ Changing the default target requires updating `scripts/config.ps1` and usually `
 | --- | --- |
 | Add a Fabric target | `config/versions.tsv`, `scripts/config.ps1`, `launch/loaders/fabric.cpp`, [BUILDING.md](BUILDING.md) |
 | Add a NeoForge target | `config/versions.tsv`, manifest generation in `scripts/`, `launch/loaders/neoforge.cpp` |
-| Add another Forge target | `launch/loaders/forge.cpp`, `config/versions.tsv`, `forge_controller_mod/` if controller support is needed |
-| Change bundled controller behavior | `compat_mod/` (Fabric), `forge_controller_mod/` (Forge), `glfw_shim/glfw_uwp.cpp`, `mods/mod_defaults.cpp` |
+| Add another Forge target | `launch/loaders/forge.cpp`, `config/versions.tsv`, `controller_mod/forge/` if controller support is needed |
+| Change bundled controller behavior | `controller_mod/`, `glfw_shim/glfw_uwp.cpp`, `mods/mod_defaults.cpp` |
 | Change sign in or ownership checks | `auth/minecraft_auth.cpp` |
 | Change main menu or auth UI | `ui/launcher_ui.cpp`, `ui/auth_screen` |
 | Change downloads or repair behavior | `launch/runtime_manager.cpp` |

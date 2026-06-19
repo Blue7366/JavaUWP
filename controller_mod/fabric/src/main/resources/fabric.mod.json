@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "banditvault_fabric_controller",
+  "version": "1.0.0",
+  "name": "Bandit Fabric Controller",
+  "description": "Xbox controller support for Bandit Launcher on Fabric.",
+  "environment": "client",
+  "mixins": [
+    "banditvault-fabric-controller.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=__FABRIC_LOADER_VERSION__",
+    "minecraft": "__MINECRAFT_VERSION__"
+  }
+}

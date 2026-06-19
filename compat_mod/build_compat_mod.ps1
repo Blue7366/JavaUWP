@@ -70,43 +70,11 @@ function Test-ClientJarHasClass {
 $disabledMixins = @()
 $disabledSources = @()
 $mixinAuthorVersion = $ProjectConfig.DefaultMinecraftVersion
-$controllerCompatVersions = @("1.16.5", "1.19.2", "1.20.1")
-if ($controllerCompatVersions -notcontains $MinecraftVersion) {
-    $disabledMixins += @("BanditControllerClientMixin", "BanditControllerGameRendererMixin", "BanditControllerHandledScreenMixin", "BanditControllerRecipeBookScreenMixin", "BanditControllerScreenMixin")
-    $disabledSources += @("BanditControllerCompat", "BanditControllerSettings", "BanditControllerSettingsScreen")
-}
 # cursor overlay now lives in the glfw shim, so the mod never draws it on any version
 $disabledMixins += @("BanditMouseCursorRecipeBookScreenMixin", "BanditMouseCursorScreenMixin")
 $disabledSources += "BanditMouseCursorOverlay"
 
 $sources = Get-ChildItem $srcJava -Recurse -Filter "*.java" | Select-Object -ExpandProperty FullName
-
-$controllerVariantRoots = @{
-    "1.20.1" = "1.20.1"
-}
-$controllerOverlayNames = @(
-    "BanditControllerCompat.java",
-    "BanditControllerSettingsScreen.java",
-    "BanditControllerGameRendererMixin.java",
-    "BanditControllerScreenMixin.java",
-    "BanditControllerRecipeBookScreenMixin.java"
-)
-if ($controllerCompatVersions -contains $MinecraftVersion -and $controllerVariantRoots.ContainsKey($MinecraftVersion)) {
-    $variantRoot = Join-Path $PSScriptRoot ("src\variants\" + $controllerVariantRoots[$MinecraftVersion])
-    $sources = @($sources | Where-Object { $controllerOverlayNames -notcontains (Split-Path $_ -Leaf) })
-    foreach ($name in $controllerOverlayNames) {
-        $relative = if ($name -like "*Mixin.java") {
-            Join-Path "banditvault\xboxcompat\mixin" $name
-        } else {
-            Join-Path "banditvault\xboxcompat" $name
-        }
-        $variantPath = Join-Path $variantRoot $relative
-        if (-not (Test-Path $variantPath)) {
-            throw "Missing controller variant source for ${MinecraftVersion}: $variantPath"
-        }
-        $sources += $variantPath
-    }
-}
 
 if ($MinecraftVersion -eq $mixinAuthorVersion) {
     $disabledMixins += "ZipFsBypass121Mixin"

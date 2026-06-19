@@ -504,6 +504,16 @@ function Test-ForgeControllerTarget {
         $Target.loaderVersion -eq "47.4.20"
 }
 
+function Test-FabricControllerTarget {
+    param([Parameter(Mandatory = $true)]$Target)
+
+    return $Target.loader -eq "fabric" -and (
+        $Target.minecraftVersion -eq "1.16.5" -or
+        $Target.minecraftVersion -eq "1.19.2" -or
+        $Target.minecraftVersion -eq "1.20.1"
+    )
+}
+
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
     Where-Object { $_ } |
     Select-Object -Unique
@@ -651,6 +661,19 @@ if (-not $SkipVersionCompat) {
             Write-Warning "Per-version compat mod skipped for ${targetId}: $($_.Exception.Message)"
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
+        if (Test-FabricControllerTarget -Target $row) {
+            Write-Host "Building per-version Fabric controller mod: $targetId"
+            try {
+                & (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
+                    -MinecraftVersion $row.minecraftVersion `
+                    -LoaderVersion $lv `
+                    -OutputDir $outDir
+            } catch {
+                Write-Warning "Per-version Fabric controller mod skipped for ${targetId}: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Host "Skipping per-version Fabric controller mod for ${targetId}: no bundled controller provider for this target"
+        }
     }
     foreach ($row in $forgeTargets) {
         $lv = $row.loaderVersion
@@ -662,7 +685,7 @@ if (-not $SkipVersionCompat) {
         $outDir = Join-Path $versionModsRoot $targetId
         Write-Host "Building per-version forge controller mod: $targetId"
         try {
-            & (Join-Path $root "forge_controller_mod\build_forge_controller_mod.ps1") `
+            & (Join-Path $root "controller_mod\forge\build_forge_controller_mod.ps1") `
                 -MinecraftVersion $row.minecraftVersion `
                 -ForgeVersion "$($row.minecraftVersion)-$lv" `
                 -OutputDir $outDir

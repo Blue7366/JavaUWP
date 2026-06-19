@@ -41,15 +41,10 @@ The top level build also runs it automatically.
 
 ## Compatibility mod
 
-`compat_mod` is a client compatibility mod with mixins for Minecraft, mod, controller, filesystem, and graphics code paths that need sandbox aware behavior. It is built per target and copied into the active profile when that target needs it.
+`compat_mod` is a client compatibility mod with mixins for Minecraft, mod, filesystem, and graphics code paths that need sandbox aware behavior. It is built per target and copied into the active profile when that target needs it.
 
 Current mixins:
 
-- `BanditControllerClientMixin`
-- `BanditControllerGameRendererMixin`
-- `BanditControllerHandledScreenMixin`
-- `BanditControllerRecipeBookScreenMixin`
-- `BanditControllerScreenMixin`
 - `CobblemonShowdownFileSystemMixin`
 - `MinecraftClientProbeMixin`
 - `PathUtilBypassMixin`
@@ -71,18 +66,32 @@ You can build a specific target with:
 .\compat_mod\build_compat_mod.ps1 -MinecraftVersion 1.20.1 -LoaderVersion 0.19.2
 ```
 
-The build disables mixins and sources that do not apply to the requested Minecraft version. Controller sources are included for bundled-controller targets such as `1.16.5`, `1.19.2`, and `1.20.1`, and excluded from modern targets where Controlify is the expected controller mod.
+The build disables compatibility mixins and sources that do not apply to the requested Minecraft version. Controller code is built separately from `controller_mod/`.
 
 The top level package step places the default compatibility mod under `runtime\bundled-mods`, and places per target compatibility mod jars under `runtime\version-mods\<target-id>`. The UWP host copies the right launcher owned mods into the active profile's writable game folder on launch.
 
-For `1.20.1` Fabric, controller specific sources are overlaid from `compat_mod\src\variants\1.20.1\` at build time because that target uses different intermediary class names than the default compatibility mod sources.
+## Fabric controller mod
+
+Fabric controller support lives in:
+
+```text
+controller_mod\fabric\
+```
+
+Build it directly with:
+
+```powershell
+.\controller_mod\fabric\build_fabric_controller_mod.ps1 -MinecraftVersion 1.20.1 -LoaderVersion 0.19.2
+```
+
+For `1.20.1` Fabric, controller specific sources are overlaid from `controller_mod\fabric\src\variants\1.20.1\` at build time because that target uses different intermediary class names than the default controller sources.
 
 ## Forge controller mod
 
-Forge cannot reuse the Fabric compatibility mod directly because Forge runs SRG named classes, not Fabric intermediary mappings. Controller support for Forge `1.20.1` lives in:
+Forge cannot reuse the Fabric controller mod directly because Forge runs SRG named classes, not Fabric intermediary mappings. Controller support for Forge `1.20.1` lives in:
 
 ```text
-forge_controller_mod\
+controller_mod\forge\
 ```
 
 The mod provides:
@@ -94,7 +103,7 @@ The mod provides:
 Build it directly with:
 
 ```powershell
-.\forge_controller_mod\build_forge_controller_mod.ps1
+.\controller_mod\forge\build_forge_controller_mod.ps1
 ```
 
 The top level build places the output jar under:

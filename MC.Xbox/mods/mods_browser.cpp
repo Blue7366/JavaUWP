@@ -1287,7 +1287,6 @@ static std::vector<std::wstring> RecommendedSlugsForTarget(const LaunchTarget& t
         if (CompareVersionNumbers(version, "1.21.1") >= 0) {
             return {
                 L"sodium",
-                L"controlify",
                 L"jei"
             };
         }
@@ -1310,10 +1309,6 @@ static std::vector<std::wstring> RecommendedSlugsForTarget(const LaunchTarget& t
             L"fpsdisplay",
             L"modmenu"
         };
-        // 1.20.1 uses the bundled Bandit controller layer; Controlify is not available there.
-        if (CompareVersionNumbers(version, "1.20.1") > 0) {
-            slugs.insert(slugs.begin() + 6, L"controlify");
-        }
         return slugs;
     }
 

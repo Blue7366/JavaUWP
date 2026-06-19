@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "banditvault.forgecontroller.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "ForgeControllerGameRendererMixin",
+    "ForgeControllerHandledScreenMixin",
+    "ForgeControllerInventoryScreenMixin",
+    "ForgeControllerScreenMixin",
+    "ForgeControllerTitleScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

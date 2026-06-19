@@ -65,7 +65,7 @@ For adding another playable Fabric target, add it to `config\versions.tsv`, make
 
 For adding another playable NeoForge target, the launcher needs matching NeoForge install metadata in the generated manifest and launch provider logic in `MC.Xbox\launch\loaders\neoforge.cpp` (dispatched through `launch\loaders\loader.cpp`). NeoForge generates patched client artifacts on first launch from downloaded official inputs. Do not commit or redistribute generated NeoForge client jars.
 
-Forge `1.20.1 + 47.4.20` has an experimental launch provider in `launch\loaders\forge.cpp`. The build also packages a per target Forge controller mod from `forge_controller_mod\`.
+Forge `1.20.1 + 47.4.20` has an experimental launch provider in `launch\loaders\forge.cpp`. The build also packages a per target Forge controller mod from `controller_mod\forge\`.
 
 Forge build inputs that belong in the repo:
 
@@ -81,7 +81,7 @@ build\forge-installer.jar
 
 `scripts\prepare-forge-patched-client.ps1` uses those files to generate or refresh the patched Forge client jar in the local cache. See [PATCHING.md](PATCHING.md) for controller mod details.
 
-For adding another playable Forge target, add it to `config\versions.tsv`, extend `launch\loaders\forge.cpp`, and let `build.ps1` generate the manifest plus any `forge_controller_mod` output under `runtime\version-mods\<target-id>\`.
+For adding another playable Forge target, add it to `config\versions.tsv`, extend `launch\loaders\forge.cpp`, and let `build.ps1` generate the manifest plus any `controller_mod` output under `runtime\version-mods\<target-id>\`.
 
 ## UWP host source layout
 
@@ -330,18 +330,18 @@ If all of those are there, put launcher owned or explicitly allowed mod jars int
 
 For non default Fabric targets, `compat_mod\build_compat_mod.ps1` will call `scripts\prepare-ci-cache.ps1` for the requested Minecraft and loader version if the matching remapped client jar is missing.
 
-`1.20.1` Fabric controller sources live under `compat_mod\src\variants\1.20.1\` because that target uses different intermediary mappings than the default compatibility mod sources.
+`1.20.1` Fabric controller sources live under `controller_mod\fabric\src\variants\1.20.1\` because that target uses different intermediary mappings than the default controller sources.
 
 Build the Forge controller mod directly with:
 
 ```powershell
-.\forge_controller_mod\build_forge_controller_mod.ps1
+.\controller_mod\forge\build_forge_controller_mod.ps1
 ```
 
 Or build a specific Forge target into `runtime\version-mods\`:
 
 ```powershell
-.\forge_controller_mod\build_forge_controller_mod.ps1 `
+.\controller_mod\forge\build_forge_controller_mod.ps1 `
   -MinecraftVersion 1.20.1 `
   -ForgeVersion 1.20.1-47.4.20 `
   -OutputDir .\runtime\version-mods\1.20.1-forge-47.4.20
