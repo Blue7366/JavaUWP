@@ -481,8 +481,12 @@ static bool g_remote_mouse_abs_pending = false;
 static bool g_remote_mouse_abs_window = false;
 static double g_remote_mouse_abs_x = 960.0;
 static double g_remote_mouse_abs_y = 540.0;
-static int g_remote_mouse_button_changes = 0;
 static int g_remote_mouse_buttons = 0;
+struct RemoteMouseButtonEvent {
+    int button;
+    int action;
+};
+static std::vector<RemoteMouseButtonEvent> g_remote_mouse_button_events;
 static double g_remote_mouse_dx = 0.0;
 static double g_remote_mouse_dy = 0.0;
 static SRWLOCK g_remote_mouse_lock = SRWLOCK_INIT;
@@ -500,6 +504,14 @@ static int g_process_events_error_log_count = 0;
 static int g_nested_process_log_count = 0;
 static int g_process_events_offthread_log_count = 0;
 static bool g_controller_bridge_enabled = false;
+
+enum CursorInputOwner : LONG {
+    CursorInputOwnerNone = 0,
+    CursorInputOwnerRelay = 1,
+    CursorInputOwnerController = 2,
+};
+static volatile LONG g_cursor_input_owner = CursorInputOwnerNone;
+static constexpr float kControllerCursorTakeoverThreshold = 0.35f;
 
 static double CurrentPointerScaleX();
 static double CurrentPointerScaleY();
@@ -523,7 +535,7 @@ static void FireRemoteMouseButtonCallback(int button, int action);
 static void SetRemoteMouseButtonState(int button, int action);
 static void SetMouseButtonState(int button, int action, bool fireCallback);
 static bool AnyMouseButtonDown();
-static void QueueRemoteMouseButton(int buttonBit, int value, int& buttons, int& changes);
+static void QueueRemoteMouseButton(int buttonBit, int value, int& buttons);
 static void DrainRemoteMouseInput();
 static void StartRemoteMouseServer();
 static void MarkMouseCompanionSeen();
@@ -982,6 +994,21 @@ static float AbsGamepadAxis(float value) {
     return value < 0.0f ? -value : value;
 }
 
+static CursorInputOwner CurrentCursorInputOwner() {
+    return static_cast<CursorInputOwner>(
+        InterlockedCompareExchange(&g_cursor_input_owner, CursorInputOwnerNone, CursorInputOwnerNone));
+}
+
+static void SetCursorInputOwner(CursorInputOwner owner) {
+    const LONG previous = InterlockedExchange(&g_cursor_input_owner, owner);
+    if (previous == owner) return;
+
+    const char* name = owner == CursorInputOwnerRelay
+        ? "relay"
+        : (owner == CursorInputOwnerController ? "controller" : "none");
+    ShimLog("Cursor input owner: %s", name);
+}
+
 static bool LegacyControllerModMode() {
     const bool enabled = EnvFlagEnabled(L"MC_LEGACY_CONTROLLER_MOD");
     if (!g_legacyControllerModModeLogged || enabled != g_lastLegacyControllerModMode) {
@@ -1077,6 +1104,15 @@ static bool PollGameInputGamepad(bool fireCallbacks) {
     }
 
     ConvertGameInputGamepadState(state);
+    if (g_cursorMode != GLFW_CURSOR_DISABLED && CurrentCursorInputOwner() == CursorInputOwnerRelay) {
+        const float cursorAxis = (std::max)(
+            AbsGamepadAxis(state.leftThumbstickX),
+            AbsGamepadAxis(state.leftThumbstickY));
+        if (cursorAxis >= kControllerCursorTakeoverThreshold) {
+            SetCursorInputOwner(CursorInputOwnerController);
+            SendCursorOverlayState();
+        }
+    }
     if (fireCallbacks) {
         UpdateControllerBridge(state);
     }
@@ -1755,7 +1791,7 @@ static void DispatchCursorEnter(bool entered) {
         g_cursorenter_cb((GLFWwindow*)&g_fake_window, entered ? GLFW_TRUE : GLFW_FALSE);
     }
 }
-static void DispatchCursorPos(double x, double y) {
+static void DispatchCursorPosInternal(double x, double y, bool updateOverlayPosition) {
     if (g_cursorMode != GLFW_CURSOR_DISABLED) {
         if (x < 0.0) x = 0.0;
         if (y < 0.0) y = 0.0;
@@ -1773,7 +1809,7 @@ static void DispatchCursorPos(double x, double y) {
     
     
     
-    if (g_cursorMode != GLFW_CURSOR_DISABLED) {
+    if (g_cursorMode != GLFW_CURSOR_DISABLED && updateOverlayPosition) {
         g_menu_abs_x = g_cursor_x;
         g_menu_abs_y = g_cursor_y;
         SendCursorOverlayState();
@@ -1784,10 +1820,30 @@ static void DispatchCursorPos(double x, double y) {
         g_cursorpos_cb((GLFWwindow*)&g_fake_window, g_cursor_x, g_cursor_y);
     }
 }
+static void DispatchCursorPos(double x, double y) {
+    DispatchCursorPosInternal(x, y, true);
+}
 static double ClampDouble(double value, double minValue, double maxValue) {
     if (value < minValue) return minValue;
     if (value > maxValue) return maxValue;
     return value;
+}
+static double MapCoordinate(double value, double sourceExtent, double targetExtent) {
+    if (sourceExtent <= 1.0 || targetExtent <= 1.0) return 0.0;
+    const double clamped = ClampDouble(value, 0.0, sourceExtent - 1.0);
+    return clamped * ((targetExtent - 1.0) / (sourceExtent - 1.0));
+}
+static double WindowToMenuInputX(double x) {
+    return MapCoordinate(x, (double)g_window_width, (double)g_menu_window_width);
+}
+static double WindowToMenuInputY(double y) {
+    return MapCoordinate(y, (double)g_window_height, (double)g_menu_window_height);
+}
+static double MenuInputToWindowX(double x) {
+    return MapCoordinate(x, (double)g_menu_window_width, (double)g_window_width);
+}
+static double MenuInputToWindowY(double y) {
+    return MapCoordinate(y, (double)g_menu_window_height, (double)g_window_height);
 }
 static double CursorMaxX() {
     return g_window_width > 1 ? (double)(g_window_width - 1) : 0.0;
@@ -1822,7 +1878,8 @@ static void SendCursorOverlayState() {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
     char packet[64] = {};
-    const int visible = (g_cursorMode == GLFW_CURSOR_NORMAL) ? 1 : 0;
+    const int visible = (g_cursorMode == GLFW_CURSOR_NORMAL &&
+        CurrentCursorInputOwner() == CursorInputOwnerRelay) ? 1 : 0;
     
     sprintf_s(packet, "CURSOR:%.0f,%.0f,%d",
         WindowToProtocolX(g_menu_abs_x), WindowToProtocolY(g_menu_abs_y), visible);
@@ -1887,28 +1944,33 @@ static void DispatchMouseDelta(double dx, double dy) {
     }
 }
 static void DispatchMouseAbsolute(double x, double y) {
-    
     g_menu_abs_x = ClampDouble(ProtocolToWindowX(x), 0.0, CursorMaxX());
     g_menu_abs_y = ClampDouble(ProtocolToWindowY(y), 0.0, CursorMaxY());
-    DispatchCursorPos(g_menu_abs_x, g_menu_abs_y);
+    const double inputX = WindowToMenuInputX(g_menu_abs_x);
+    const double inputY = WindowToMenuInputY(g_menu_abs_y);
+    DispatchCursorPosInternal(inputX, inputY, false);
     SendCursorOverlayState();
     if (g_remote_mouse_log_count < 12) {
         ++g_remote_mouse_log_count;
-        ShimLog("RemoteMouse ABS protocol=%.1f,%.1f -> window=%.1f,%.1f (win %dx%d fb %dx%d scale %.3f)",
+        ShimLog("RemoteMouse ABS protocol=%.1f,%.1f -> window=%.1f,%.1f input=%.1f,%.1f (win %dx%d menu %dx%d)",
             x, y, g_menu_abs_x, g_menu_abs_y,
-            g_window_width, g_window_height, g_width, g_height, g_content_scale);
+            inputX, inputY,
+            g_window_width, g_window_height, g_menu_window_width, g_menu_window_height);
     }
 }
 static void DispatchMouseWindowAbsolute(double x, double y) {
     g_menu_abs_x = ClampDouble(x, 0.0, CursorMaxX());
     g_menu_abs_y = ClampDouble(y, 0.0, CursorMaxY());
-    DispatchCursorPos(g_menu_abs_x, g_menu_abs_y);
+    const double inputX = WindowToMenuInputX(g_menu_abs_x);
+    const double inputY = WindowToMenuInputY(g_menu_abs_y);
+    DispatchCursorPosInternal(inputX, inputY, false);
     SendCursorOverlayState();
     if (g_remote_mouse_log_count < 12) {
         ++g_remote_mouse_log_count;
-        ShimLog("RemoteMouse ABSW window=%.1f,%.1f (win %dx%d fb %dx%d scale %.3f)",
+        ShimLog("RemoteMouse ABSW window=%.1f,%.1f -> input=%.1f,%.1f (win %dx%d menu %dx%d)",
             g_menu_abs_x, g_menu_abs_y,
-            g_window_width, g_window_height, g_width, g_height, g_content_scale);
+            inputX, inputY,
+            g_window_width, g_window_height, g_menu_window_width, g_menu_window_height);
     }
 }
 static void FireRemoteMouseButtonCallback(int button, int action) {
@@ -1959,11 +2021,28 @@ static void FlushMouseButtonsForDeactivate() {
         }
     }
 }
-static void QueueRemoteMouseButton(int buttonBit, int value, int& buttons, int& changes) {
+static void QueueRemoteMouseButton(int buttonBit, int value, int& buttons) {
     if (value < 0) return;
-    changes |= buttonBit;
-    if (value) buttons |= buttonBit;
+    const bool wasDown = (buttons & buttonBit) != 0;
+    const bool isDown = value != 0;
+    if (wasDown == isDown) return;
+
+    if (isDown) buttons |= buttonBit;
     else buttons &= ~buttonBit;
+
+    int button = GLFW_MOUSE_BUTTON_LEFT;
+    switch (buttonBit) {
+    case 1: button = GLFW_MOUSE_BUTTON_LEFT; break;
+    case 2: button = GLFW_MOUSE_BUTTON_RIGHT; break;
+    case 4: button = GLFW_MOUSE_BUTTON_MIDDLE; break;
+    case 8: button = GLFW_MOUSE_BUTTON_4; break;
+    case 16: button = GLFW_MOUSE_BUTTON_5; break;
+    default: return;
+    }
+    g_remote_mouse_button_events.push_back({
+        button,
+        isDown ? GLFW_PRESS : GLFW_RELEASE,
+    });
 }
 static void DrainRemoteMouseInput() {
     double dx = 0.0;
@@ -1972,8 +2051,7 @@ static void DrainRemoteMouseInput() {
     double absX = 0.0;
     double absY = 0.0;
     double wheelY = 0.0;
-    int buttons = 0;
-    int buttonChanges = 0;
+    std::vector<RemoteMouseButtonEvent> buttonEvents;
 
     AcquireSRWLockExclusive(&g_remote_mouse_lock);
     dx = g_remote_mouse_dx;
@@ -1983,14 +2061,12 @@ static void DrainRemoteMouseInput() {
     absY = g_remote_mouse_abs_y;
     const bool absWindow = g_remote_mouse_abs_window;
     wheelY = g_remote_mouse_wheel_y;
-    buttons = g_remote_mouse_buttons;
-    buttonChanges = g_remote_mouse_button_changes;
+    buttonEvents.swap(g_remote_mouse_button_events);
     g_remote_mouse_dx = 0.0;
     g_remote_mouse_dy = 0.0;
     g_remote_mouse_abs_pending = false;
     g_remote_mouse_abs_window = false;
     g_remote_mouse_wheel_y = 0.0;
-    g_remote_mouse_button_changes = 0;
     ReleaseSRWLockExclusive(&g_remote_mouse_lock);
 
     if (absPending) {
@@ -2006,27 +2082,12 @@ static void DrainRemoteMouseInput() {
         g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, wheelY);
     }
 
-    if (buttonChanges) {
-        if (buttonChanges & 1) {
-        SetRemoteMouseButtonState(GLFW_MOUSE_BUTTON_LEFT,
-            (buttons & 1) ? GLFW_PRESS : GLFW_RELEASE);
-        }
-        if (buttonChanges & 2) {
-        SetRemoteMouseButtonState(GLFW_MOUSE_BUTTON_RIGHT,
-            (buttons & 2) ? GLFW_PRESS : GLFW_RELEASE);
-        }
-        if (buttonChanges & 4) {
-        SetRemoteMouseButtonState(GLFW_MOUSE_BUTTON_MIDDLE,
-            (buttons & 4) ? GLFW_PRESS : GLFW_RELEASE);
-        }
-        if (buttonChanges & 8) {
-        SetRemoteMouseButtonState(GLFW_MOUSE_BUTTON_4,
-            (buttons & 8) ? GLFW_PRESS : GLFW_RELEASE);
-        }
-        if (buttonChanges & 16) {
-        SetRemoteMouseButtonState(GLFW_MOUSE_BUTTON_5,
-            (buttons & 16) ? GLFW_PRESS : GLFW_RELEASE);
-        }
+    for (const RemoteMouseButtonEvent& event : buttonEvents) {
+        ShimLog("RemoteMouse button=%d action=%s callback=%s",
+            event.button,
+            event.action == GLFW_PRESS ? "PRESS" : "RELEASE",
+            g_mousebutton_cb ? "set" : "missing");
+        SetRemoteMouseButtonState(event.button, event.action);
     }
 }
 static void StartRemoteMouseServer() {
@@ -2175,13 +2236,14 @@ static void StartRemoteMouseServer() {
                     g_remote_mouse_dy += (double)dy;
                 }
                 g_remote_mouse_wheel_y += (double)wheelY;
-                QueueRemoteMouseButton(1, lb, g_remote_mouse_buttons, g_remote_mouse_button_changes);
-                QueueRemoteMouseButton(2, rb, g_remote_mouse_buttons, g_remote_mouse_button_changes);
-                QueueRemoteMouseButton(4, mb, g_remote_mouse_buttons, g_remote_mouse_button_changes);
-                QueueRemoteMouseButton(8, x1, g_remote_mouse_buttons, g_remote_mouse_button_changes);
-                QueueRemoteMouseButton(16, x2, g_remote_mouse_buttons, g_remote_mouse_button_changes);
+                QueueRemoteMouseButton(1, lb, g_remote_mouse_buttons);
+                QueueRemoteMouseButton(2, rb, g_remote_mouse_buttons);
+                QueueRemoteMouseButton(4, mb, g_remote_mouse_buttons);
+                QueueRemoteMouseButton(8, x1, g_remote_mouse_buttons);
+                QueueRemoteMouseButton(16, x2, g_remote_mouse_buttons);
                 ReleaseSRWLockExclusive(&g_remote_mouse_lock);
                 InterlockedExchange(&g_remote_mouse_seen, 1);
+                SetCursorInputOwner(CursorInputOwnerRelay);
                 
                 
                 
@@ -2934,9 +2996,11 @@ extern "C" __declspec(dllexport) GLFWcharmodsfun glfwSetCharModsCallback(GLFWwin
     return SwapCallback(g_charmods_cb, cb);
 }
 extern "C" __declspec(dllexport) GLFWmousebuttonfun glfwSetMouseButtonCallback(GLFWwindow*, GLFWmousebuttonfun cb) {
+    ShimLog("glfwSetMouseButtonCallback cb=%p", cb);
     return SwapCallback(g_mousebutton_cb, cb);
 }
 extern "C" __declspec(dllexport) GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow*, GLFWcursorposfun cb) {
+    ShimLog("glfwSetCursorPosCallback cb=%p", cb);
     return SwapCallback(g_cursorpos_cb, cb);
 }
 extern "C" __declspec(dllexport) GLFWcursorenterfun glfwSetCursorEnterCallback(GLFWwindow*, GLFWcursorenterfun cb) {
@@ -3182,10 +3246,15 @@ extern "C" __declspec(dllexport) void glfwSetCursorPos(GLFWwindow*, double x, do
         return;
     }
 
-    
-    g_menu_abs_x = ClampDouble(x, 0.0, CursorMaxX());
-    g_menu_abs_y = ClampDouble(y, 0.0, CursorMaxY());
-    DispatchCursorPos(g_menu_abs_x, g_menu_abs_y);
+    if (CurrentCursorInputOwner() == CursorInputOwnerRelay) {
+        g_menu_abs_x = ClampDouble(MenuInputToWindowX(x), 0.0, CursorMaxX());
+        g_menu_abs_y = ClampDouble(MenuInputToWindowY(y), 0.0, CursorMaxY());
+        DispatchCursorPosInternal(x, y, false);
+    } else {
+        g_menu_abs_x = ClampDouble(x, 0.0, CursorMaxX());
+        g_menu_abs_y = ClampDouble(y, 0.0, CursorMaxY());
+        DispatchCursorPos(g_menu_abs_x, g_menu_abs_y);
+    }
     SendCursorOverlayState();
 
     if (!AcquireCoreWindow()) return;
@@ -3395,11 +3464,13 @@ typedef GLuint (__stdcall *PFN_createShader)(GLenum);
 typedef void   (__stdcall *PFN_shaderSrc)(GLuint, GLsizei, const GLchar* const*, const GLint*);
 typedef void   (__stdcall *PFN_compileShader)(GLuint);
 typedef void   (__stdcall *PFN_getShaderiv)(GLuint, GLenum, GLint*);
+typedef void   (__stdcall *PFN_getShaderInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*);
 typedef void   (__stdcall *PFN_delShader)(GLuint);
 typedef GLuint (__stdcall *PFN_createProg)(void);
 typedef void   (__stdcall *PFN_attachShader)(GLuint, GLuint);
 typedef void   (__stdcall *PFN_linkProg)(GLuint);
 typedef void   (__stdcall *PFN_getProgramiv)(GLuint, GLenum, GLint*);
+typedef void   (__stdcall *PFN_getProgramInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*);
 typedef void   (__stdcall *PFN_useProg)(GLuint);
 typedef GLint  (__stdcall *PFN_getAttribLoc)(GLuint, const GLchar*);
 typedef void   (__stdcall *PFN_enableVaa)(GLuint);
@@ -3448,11 +3519,13 @@ static PFN_createShader  p_createShader = nullptr;
 static PFN_shaderSrc     p_shaderSrc = nullptr;
 static PFN_compileShader p_compileShader = nullptr;
 static PFN_getShaderiv   p_getShaderiv = nullptr;
+static PFN_getShaderInfoLog p_getShaderInfoLog = nullptr;
 static PFN_delShader     p_delShader = nullptr;
 static PFN_createProg    p_createProg = nullptr;
 static PFN_attachShader  p_attachShader = nullptr;
 static PFN_linkProg      p_linkProg = nullptr;
 static PFN_getProgramiv  p_getProgramiv = nullptr;
+static PFN_getProgramInfoLog p_getProgramInfoLog = nullptr;
 static PFN_useProg       p_useProg = nullptr;
 static PFN_getAttribLoc  p_getAttribLoc = nullptr;
 static PFN_enableVaa     p_enableVaa = nullptr;
@@ -3477,9 +3550,10 @@ static GLint g_locColor = -1;
 
 static void* Resolve(const char* name) {
     void* p = nullptr;
-    if (g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
-    if (!p && p_eglGetProcAddress) p = p_eglGetProcAddress(name);
+    if (p_eglGetProcAddress) p = p_eglGetProcAddress(name);
+    if (!p && g_graphicsRuntimeUsesGles && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     if (!p && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
+    if (!p && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     return p;
 }
 
@@ -3491,6 +3565,10 @@ static GLuint CompileShader(GLenum type, const char* src) {
     GLint ok = 0;
     p_getShaderiv(s, GL_C_COMPILE_STATUS, &ok);
     if (!ok) {
+        char info[1024] = {};
+        GLsizei length = 0;
+        if (p_getShaderInfoLog) p_getShaderInfoLog(s, (GLsizei)sizeof(info) - 1, &length, info);
+        ShimLog("Mouse cursor overlay shader compile failed type=0x%X: %s", type, info);
         p_delShader(s);
         return 0;
     }
@@ -3511,11 +3589,13 @@ static bool LoadFns() {
     p_shaderSrc = (PFN_shaderSrc)Resolve("glShaderSource");
     p_compileShader = (PFN_compileShader)Resolve("glCompileShader");
     p_getShaderiv = (PFN_getShaderiv)Resolve("glGetShaderiv");
+    p_getShaderInfoLog = (PFN_getShaderInfoLog)Resolve("glGetShaderInfoLog");
     p_delShader = (PFN_delShader)Resolve("glDeleteShader");
     p_createProg = (PFN_createProg)Resolve("glCreateProgram");
     p_attachShader = (PFN_attachShader)Resolve("glAttachShader");
     p_linkProg = (PFN_linkProg)Resolve("glLinkProgram");
     p_getProgramiv = (PFN_getProgramiv)Resolve("glGetProgramiv");
+    p_getProgramInfoLog = (PFN_getProgramInfoLog)Resolve("glGetProgramInfoLog");
     p_useProg = (PFN_useProg)Resolve("glUseProgram");
     p_getAttribLoc = (PFN_getAttribLoc)Resolve("glGetAttribLocation");
     p_enableVaa = (PFN_enableVaa)Resolve("glEnableVertexAttribArray");
@@ -3531,8 +3611,8 @@ static bool LoadFns() {
     p_bindFb = (PFN_bindFb)Resolve("glBindFramebuffer");
 
     return p_genVao && p_bindVao && p_genBuf && p_bindBuf && p_bufData &&
-        p_createShader && p_shaderSrc && p_compileShader && p_getShaderiv && p_delShader &&
-        p_createProg && p_attachShader && p_linkProg && p_getProgramiv && p_useProg &&
+        p_createShader && p_shaderSrc && p_compileShader && p_getShaderiv && p_getShaderInfoLog && p_delShader &&
+        p_createProg && p_attachShader && p_linkProg && p_getProgramiv && p_getProgramInfoLog && p_useProg &&
         p_getAttribLoc && p_enableVaa && p_vaPointer && p_drawArrays && p_viewport &&
         p_enable && p_disable && p_isEnabled && p_blendFunc && p_blendFuncSep &&
         p_getIntegerv && p_bindFb;
@@ -3541,12 +3621,20 @@ static bool LoadFns() {
 static bool Init() {
     if (!LoadFns()) return false;
 
-    const char* vs =
-        "attribute vec2 aPos;attribute vec4 aColor;varying vec4 vColor;"
-        "void main(){vColor=aColor;gl_Position=vec4(aPos,0.0,1.0);}";
-    const char* fs =
-        "precision mediump float;varying vec4 vColor;"
-        "void main(){gl_FragColor=vColor;}";
+    const char* vs = g_graphicsRuntimeUsesGles
+        ? "#version 300 es\n"
+          "in vec2 aPos;in vec4 aColor;out vec4 vColor;"
+          "void main(){vColor=aColor;gl_Position=vec4(aPos,0.0,1.0);}"
+        : "#version 150 core\n"
+          "in vec2 aPos;in vec4 aColor;out vec4 vColor;"
+          "void main(){vColor=aColor;gl_Position=vec4(aPos,0.0,1.0);}";
+    const char* fs = g_graphicsRuntimeUsesGles
+        ? "#version 300 es\n"
+          "precision mediump float;in vec4 vColor;out vec4 fragColor;"
+          "void main(){fragColor=vColor;}"
+        : "#version 150 core\n"
+          "in vec4 vColor;out vec4 fragColor;"
+          "void main(){fragColor=vColor;}";
 
     GLuint v = CompileShader(GL_C_VERTEX_SHADER, vs);
     GLuint f = CompileShader(GL_C_FRAGMENT_SHADER, fs);
@@ -3560,7 +3648,13 @@ static bool Init() {
     p_getProgramiv(g_prog, GL_C_LINK_STATUS, &ok);
     p_delShader(v);
     p_delShader(f);
-    if (!ok) return false;
+    if (!ok) {
+        char info[1024] = {};
+        GLsizei length = 0;
+        p_getProgramInfoLog(g_prog, (GLsizei)sizeof(info) - 1, &length, info);
+        ShimLog("Mouse cursor overlay program link failed: %s", info);
+        return false;
+    }
 
     g_locPos = p_getAttribLoc(g_prog, "aPos");
     g_locColor = p_getAttribLoc(g_prog, "aColor");
@@ -3576,6 +3670,7 @@ static bool Init() {
     p_enableVaa((GLuint)g_locColor);
     p_vaPointer((GLuint)g_locColor, 4, GL_C_FLOAT, 0, stride, (const void*)(2 * sizeof(GLfloat)));
     p_bindVao(0);
+    ShimLog("Mouse cursor overlay initialized (%s)", g_graphicsRuntimeUsesGles ? "GLES3" : "OpenGL 3.2 core");
     return true;
 }
 
@@ -3595,7 +3690,11 @@ static void Draw() {
     if (g_failed) return;
     if (!g_ready) {
         g_ready = Init();
-        if (!g_ready) { g_failed = true; return; }
+        if (!g_ready) {
+            ShimLog("Mouse cursor overlay initialization failed");
+            g_failed = true;
+            return;
+        }
     }
 
     const float fbw = (float)(g_framebuffer_width > 0 ? g_framebuffer_width : 1920);
@@ -3663,7 +3762,9 @@ extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
         ShimLog("glfwSwapBuffers #%d", g_swap_log_count);
     }
     if (!p_eglSwapBuffers || g_eglDisplay == EGL_NO_DISPLAY || g_eglSurface == EGL_NO_SURFACE) return;
-    if (MouseCompanionActive() && g_cursorMode == GLFW_CURSOR_NORMAL) {
+    if (MouseCompanionActive() &&
+        g_cursorMode == GLFW_CURSOR_NORMAL &&
+        CurrentCursorInputOwner() == CursorInputOwnerRelay) {
         bandit_cursor::Draw();
     }
     if (!p_eglSwapBuffers(g_eglDisplay, g_eglSurface)) {

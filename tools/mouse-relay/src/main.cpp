@@ -1022,6 +1022,9 @@ private:
             if (status.rfind("SYNC:", 0) == 0) {
                 syncX = syncX * (MenuTargetWidth() / kTargetWidth);
                 syncY = syncY * (MenuTargetHeight() / kTargetHeight);
+            } else if (status.rfind("SYNCW:", 0) == 0) {
+                syncX = WindowToMenuX(syncX);
+                syncY = WindowToMenuY(syncY);
             }
             SyncMenuPos(syncX, syncY, true);
             return;
@@ -1029,7 +1032,10 @@ private:
 
         if (mode_ == RelayMode::Menu) {
             if (windowCursor) {
-                SyncMenuPos(windowCursor->first, windowCursor->second, true);
+                SyncMenuPos(
+                    WindowToMenuX(windowCursor->first),
+                    WindowToMenuY(windowCursor->second),
+                    true);
             } else if (protocolCursor) {
                 SyncMenuPos(
                     protocolCursor->first * (MenuTargetWidth() / kTargetWidth),
@@ -1109,6 +1115,30 @@ private:
         return MenuTargetHeight() / static_cast<float>(std::max(1, windowHeight_));
     }
 
+    static float MapCoordinate(float value, float sourceExtent, float targetExtent) {
+        if (sourceExtent <= 1.0f || targetExtent <= 1.0f) {
+            return 0.0f;
+        }
+        const float clamped = Clamp(value, 0.0f, sourceExtent - 1.0f);
+        return clamped * ((targetExtent - 1.0f) / (sourceExtent - 1.0f));
+    }
+
+    float MenuToWindowX(float x) const {
+        return MapCoordinate(x, MenuTargetWidth(), targetWidth_);
+    }
+
+    float MenuToWindowY(float y) const {
+        return MapCoordinate(y, MenuTargetHeight(), targetHeight_);
+    }
+
+    float WindowToMenuX(float x) const {
+        return MapCoordinate(x, targetWidth_, MenuTargetWidth());
+    }
+
+    float WindowToMenuY(float y) const {
+        return MapCoordinate(y, targetHeight_, MenuTargetHeight());
+    }
+
     void SendConnectionProbe() {
         if (!connecting_ || !transport_.IsOpen()) {
             return;
@@ -1168,8 +1198,8 @@ private:
             buffer,
             sizeof(buffer),
             "ABSW:%.4f,%.4f,%d,%d,%d,%.4f,%d,%d",
-            x,
-            y,
+            MenuToWindowX(x),
+            MenuToWindowY(y),
             buttons[0],
             buttons[1],
             buttons[2],

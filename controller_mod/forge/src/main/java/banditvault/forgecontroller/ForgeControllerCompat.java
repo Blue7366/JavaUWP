@@ -25,8 +25,8 @@ public final class ForgeControllerCompat {
     private static final int GAMEPAD_ID = GLFW.GLFW_JOYSTICK_1;
     private static final int LEFT_CLICK = 0;
     private static final int RIGHT_CLICK = 1;
-    private static final long RELAY_CURSOR_IDLE_NANOS = 500_000_000L;
     private static final double RELAY_CURSOR_MOVE_EPSILON = 0.75;
+    private static final double CONTROLLER_CURSOR_TAKEOVER_THRESHOLD = 0.35;
 
     private static final GLFWGamepadState GLFW_STATE = GLFWGamepadState.create();
     private static final ControllerState CONTROLLER_STATE = new ControllerState();
@@ -53,7 +53,7 @@ public final class ForgeControllerCompat {
     private static Object lastRelayCursorScreen;
     private static double lastRelayCursorX = Double.NaN;
     private static double lastRelayCursorY = Double.NaN;
-    private static long relayCursorActiveUntilNanos;
+    private static boolean relayOwnsCursor;
 
     private ForgeControllerCompat() {
     }
@@ -141,7 +141,7 @@ public final class ForgeControllerCompat {
         if (!active || screen == null || graphics == null) {
             return;
         }
-        if (relayCursorActive() || cursorX < 0.0 || cursorY < 0.0) {
+        if (relayOwnsCursor || cursorX < 0.0 || cursorY < 0.0) {
             return;
         }
         int x = (int) Math.round(cursorX);
@@ -164,18 +164,21 @@ public final class ForgeControllerCompat {
             return;
         }
         observeRelayCursor(screen);
+        if (relayOwnsCursor) {
+            invokeScreenMouseMoved(screen, lastRelayCursorX, lastRelayCursorY);
+        }
         updateScreenCursor(Minecraft.m_91087_(), screen, true);
     }
 
     public static int screenMouseX(int fallback) {
-        if (!active || relayCursorActive() || cursorX < 0.0) {
+        if (!active || relayOwnsCursor || cursorX < 0.0) {
             return fallback;
         }
         return (int) Math.round(cursorX);
     }
 
     public static int screenMouseY(int fallback) {
-        if (!active || relayCursorActive() || cursorY < 0.0) {
+        if (!active || relayOwnsCursor || cursorY < 0.0) {
             return fallback;
         }
         return (int) Math.round(cursorY);
@@ -365,8 +368,18 @@ public final class ForgeControllerCompat {
         }
         ensureScreenCursor(screen);
         ForgeControllerSettings settings = ForgeControllerSettings.get();
-        double dx = shapedCursorAxis(axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X), settings.cursorDeadzone);
-        double dy = shapedCursorAxis(axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y), settings.cursorDeadzone);
+        float rawX = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
+        float rawY = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
+        if (relayOwnsCursor) {
+            double takeoverMagnitude = Math.max(Math.abs(rawX), Math.abs(rawY));
+            if (takeoverMagnitude < CONTROLLER_CURSOR_TAKEOVER_THRESHOLD) {
+                lastScreenCursorNanos = System.nanoTime();
+                return;
+            }
+            relayOwnsCursor = false;
+        }
+        double dx = shapedCursorAxis(rawX, settings.cursorDeadzone);
+        double dy = shapedCursorAxis(rawY, settings.cursorDeadzone);
 
         double scale = settings.cursorSpeed;
         if (frameTimed) {
@@ -385,7 +398,6 @@ public final class ForgeControllerCompat {
         }
 
         if (dx != 0.0 || dy != 0.0) {
-            relayCursorActiveUntilNanos = 0L;
             cursorX = clamp(cursorX + dx * scale, 0.0, Math.max(1, screen.f_96543_ - 1));
             cursorY = clamp(cursorY + dy * scale, 0.0, Math.max(1, screen.f_96544_ - 1));
             invokeScreenMouseMoved(screen, cursorX, cursorY);
@@ -412,14 +424,10 @@ public final class ForgeControllerCompat {
 
         if (Math.abs(mouseX - lastRelayCursorX) > RELAY_CURSOR_MOVE_EPSILON ||
             Math.abs(mouseY - lastRelayCursorY) > RELAY_CURSOR_MOVE_EPSILON) {
-            relayCursorActiveUntilNanos = System.nanoTime() + RELAY_CURSOR_IDLE_NANOS;
+            relayOwnsCursor = true;
         }
         lastRelayCursorX = mouseX;
         lastRelayCursorY = mouseY;
-    }
-
-    private static boolean relayCursorActive() {
-        return relayCursorActiveUntilNanos != 0L && System.nanoTime() < relayCursorActiveUntilNanos;
     }
 
     private static void applyLook(LocalPlayer player, float rx, float ry, float seconds, ForgeControllerSettings settings) {
