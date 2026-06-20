@@ -171,7 +171,7 @@ jobs:
 
           Nightly releases are highly experimental builds for testing current development work. They are not full game releases, and support is not provided for nightly builds.
 
-          Redistribution of the APPX package is not permitted without prior written permission, as described in the project license. Video tutorials or other public install guides for these nightly builds are not permitted until the full release.
+          Redistribution of the APPX package is not permitted without prior written permission, as described in the project license. Videos, streams, tutorials, and install guides for these nightly builds are allowed when they follow the creator content rules in the license, including crediting and linking back to veroxsity / BanditVault.
 
           Commit: $env:GITHUB_SHA
           Workflow run: $runUrl
