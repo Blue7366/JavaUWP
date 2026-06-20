@@ -1037,7 +1037,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (earlyBlockedRemoved > 0) {
         WriteLogF(L"Removed %d blocked mod(s) from active profile before configuring launch", earlyBlockedRemoved);
     }
-    ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion);
+    ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir);
     if (SetCurrentDirectoryW(gameDir.c_str())) {
         WriteLogF(L"Process current directory set to gameDir: %s", gameDir.c_str());
     } else {

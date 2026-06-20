@@ -338,6 +338,12 @@ if (-not (Test-Path $xboxOneGlProxyDll)) { throw "Xbox One OpenGL proxy DLL miss
 Write-Host "=== Building Xbox compatibility mod ==="
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
+Write-Host "=== Building default Fabric controller mod ==="
+& (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
+    -MinecraftVersion $ProjectConfig.MinecraftVersion `
+    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
+    -OutputDir (Join-Path $gameDir "mods")
+
 Write-Host "=== Patching Fabric Loader for Xbox filesystem ==="
 & (Join-Path $root "scripts\patch-fabric.ps1")
 
@@ -499,19 +505,13 @@ $manifestTargets = @(
 function Test-ForgeControllerTarget {
     param([Parameter(Mandatory = $true)]$Target)
 
-    return $Target.loader -eq "forge" -and
-        $Target.minecraftVersion -eq "1.20.1" -and
-        $Target.loaderVersion -eq "47.4.20"
+    return $Target.loader -eq "forge" -and $Target.controllerProvider -eq "forge"
 }
 
 function Test-FabricControllerTarget {
     param([Parameter(Mandatory = $true)]$Target)
 
-    return $Target.loader -eq "fabric" -and (
-        $Target.minecraftVersion -eq "1.16.5" -or
-        $Target.minecraftVersion -eq "1.19.2" -or
-        $Target.minecraftVersion -eq "1.20.1"
-    )
+    return $Target.loader -eq "fabric" -and $Target.controllerProvider -eq "fabric"
 }
 
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |

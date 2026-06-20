@@ -67,10 +67,10 @@ minecraft version + loader + loader version
 
 | Target | State | Notes |
 | --- | --- | --- |
-| `1.21.11 + Fabric 0.19.2` | Supported | Current default target. Base game has been tested. |
-| `1.21.1 + Fabric 0.19.2` | Testing | Base game and Cobblemon have been verified. Uses Java 21 for mods that require it. |
+| `1.21.11 + Fabric 0.19.2` | Supported | Current default target with bundled controller support. Base game has been tested. |
+| `1.21.1 + Fabric 0.19.2` | Testing | Base game, bundled controller support, and Cobblemon have been verified. Uses Java 21 for mods that require it. |
 | `1.21.1 + NeoForge 21.1.233` | Experimental | Base game, Sodium, JEI, and Modrinth modpack installs have been tested. Uses Java 21. |
-| `1.20.4 + Fabric 0.19.2` | Testing | Base game has been tested. Uses Java 21. |
+| `1.20.4 + Fabric 0.19.2` | Testing | Base game has been tested and includes bundled controller support. Uses Java 21. |
 | `1.20.1 + Fabric 0.19.2` | Testing | Bundled Bandit controller layer. Uses Java 21. Still needs broader testing. |
 | `1.20.1 + Forge 47.4.20` | Experimental | Initial Forge provider with bundled controller mod. Uses Java 21. |
 | `1.19.2 + Fabric 0.14.25` | Testing | Base game and controller support have been tested. Uses Java 21. |
@@ -111,7 +111,7 @@ Other catalog entries (additional Forge versions, older vanilla targets, and fut
 - Mesa based graphics path for Xbox Series consoles.
 - Separate Xbox One graphics runtime path when packaged.
 - GameInput based controller support through the GLFW shim.
-- Bundled Bandit controller layer for `1.16.5`, `1.19.2`, and `1.20.1` Fabric, plus `1.20.1` Forge.
+- Bundled Bandit controller layer for every supported Fabric target from `1.16.5` through `1.21.11`, plus `1.20.1` Forge.
 - Shared controller settings at `config/bandit-controller.properties` (deadzones, look speed, toggle crouch/sprint).
 
 **Diagnostics and file access**
@@ -139,7 +139,7 @@ For `1.21.1 + NeoForge 21.1.233`:
 - Sodium
 - JEI
 
-For bundled-controller targets (`1.16.5`, `1.19.2`, and `1.20.1` Fabric, plus `1.20.1` Forge), Bandit Launcher includes its own controller support layer. Press **View/Back** in-game to open Bandit Controller settings. Sodium can still help performance on Fabric, but older Sodium versions may need launcher compatibility settings that are seeded automatically.
+For supported Fabric targets from `1.16.5` through `1.21.11`, plus `1.20.1` Forge, Bandit Launcher includes its own controller support layer. Press **View/Back** in-game to open Bandit Controller settings. Sodium can still help performance on Fabric, but older Sodium versions may need launcher compatibility settings that are seeded automatically.
 
 Cobblemon has been verified on `1.21.1 + Fabric 0.19.2` using the Java 21 runtime.
 

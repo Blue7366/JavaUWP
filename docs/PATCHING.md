@@ -84,7 +84,7 @@ Build it directly with:
 .\controller_mod\fabric\build_fabric_controller_mod.ps1 -MinecraftVersion 1.20.1 -LoaderVersion 0.19.2
 ```
 
-For `1.20.1` Fabric, controller specific sources are overlaid from `controller_mod\fabric\src\variants\1.20.1\` at build time because that target uses different intermediary class names than the default controller sources.
+Controller sources are overlaid by Minecraft API generation from `controller_mod\fabric\src\variants\`. The build composes the `1.20.1` DrawContext bridge, `1.20.4` screen API, `1.21` renderer signature, `1.21.4` recipe-book hierarchy, and `1.21.11` input-event API as required by each target.
 
 ## Forge controller mod
 
@@ -158,7 +158,7 @@ It handles:
 - Keyboard and text input callbacks.
 - Basic monitor, cursor, timing, and window API responses expected by LWJGL.
 - Xbox controller state through GameInput and the GLFW joystick and gamepad APIs.
-- Legacy controller input shaping when `MC_LEGACY_CONTROLLER_MOD=1` is set by the launcher for bundled Bandit controller targets (`1.16.5`, `1.19.2`, `1.20.1` Fabric, and `1.20.1` Forge).
+- Legacy controller input shaping when `MC_LEGACY_CONTROLLER_MOD=1` is set by the launcher after detecting a bundled Bandit controller jar.
 
 Build it directly with:
 

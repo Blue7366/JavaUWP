@@ -138,7 +138,7 @@ std::vector<LaunchTarget> LoadVersionCatalog(const std::wstring& runtimeRoot) {
             t.loaderVersion = parts.size() > 3 ? parts[3] : L"none";
             t.javaRuntime = parts.size() > 4 ? parts[4] : L"current";
             t.supportLevel = parts.size() > 5 ? parts[5] : L"testing";
-            t.notes = parts.size() > 6 ? parts[6] : L"";
+            t.notes = parts.size() > 7 ? parts[7] : (parts.size() > 6 ? parts[6] : L"");
             if (t.minecraftVersion.empty() || t.loader.empty()) continue;
             t.targetId = MakeTargetId(t.minecraftVersion, t.loader, t.loaderVersion);
             out.push_back(t);

@@ -4,7 +4,6 @@ import banditvault.controllercore.ControllerAxis;
 import banditvault.controllercore.ControllerButton;
 import banditvault.controllercore.ControllerRuntime;
 import banditvault.controllercore.ControllerState;
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.class_304;
 import net.minecraft.class_310;
 import net.minecraft.class_315;
@@ -115,12 +114,7 @@ public final class BanditControllerCompat {
 
         int x = (int)Math.round(cursorX);
         int y = (int)Math.round(cursorY);
-        RenderSystem.disableDepthTest();
-        RenderSystem.enableBlend();
-        context.method_25294(x - 3, y - 3, x + 4, y + 4, 0x66000000);
-        context.method_25294(x - 5, y, x + 6, y + 1, 0xFFFFFFFF);
-        context.method_25294(x, y - 5, x + 1, y + 6, 0xFFFFFFFF);
-        RenderSystem.enableDepthTest();
+        FabricScreenApi.drawCursor(context, x, y);
     }
 
     public static void renderCursorOverlay(class_310 client) {
@@ -250,19 +244,19 @@ public final class BanditControllerCompat {
         }
 
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_A)) {
-            screen.method_25402(cursorX, cursorY, LEFT_CLICK);
+            FabricScreenApi.mousePressed(screen, cursorX, cursorY, LEFT_CLICK);
         }
         if (released(GLFW.GLFW_GAMEPAD_BUTTON_A)) {
-            screen.method_25406(cursorX, cursorY, LEFT_CLICK);
+            FabricScreenApi.mouseReleased(screen, cursorX, cursorY, LEFT_CLICK);
         }
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_X)) {
-            screen.method_25402(cursorX, cursorY, RIGHT_CLICK);
+            FabricScreenApi.mousePressed(screen, cursorX, cursorY, RIGHT_CLICK);
         }
         if (released(GLFW.GLFW_GAMEPAD_BUTTON_X)) {
-            screen.method_25406(cursorX, cursorY, RIGHT_CLICK);
+            FabricScreenApi.mouseReleased(screen, cursorX, cursorY, RIGHT_CLICK);
         }
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_B)) {
-            if (!screen.method_25404(GLFW.GLFW_KEY_ESCAPE, 0, 0)) {
+            if (!FabricScreenApi.keyPressed(screen, GLFW.GLFW_KEY_ESCAPE, 0, 0)) {
                 client.method_1507(null);
             }
         }
@@ -281,7 +275,7 @@ public final class BanditControllerCompat {
                 scroll = -settings.scrollAmount;
             }
             if (scroll != 0.0) {
-                screen.method_25401(cursorX, cursorY, scroll);
+                FabricScreenApi.scroll(screen, cursorX, cursorY, scroll);
                 scrollCooldown = 5;
             }
         }

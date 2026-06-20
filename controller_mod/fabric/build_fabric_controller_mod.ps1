@@ -15,7 +15,7 @@ $controllerCoreJava = Join-Path $root "controller_mod\core\src\main\java"
 if (-not $MinecraftVersion) { $MinecraftVersion = $ProjectConfig.MinecraftVersion }
 if (-not $LoaderVersion) { $LoaderVersion = $ProjectConfig.FabricLoaderVersion }
 
-$supportedVersions = @("1.16.5", "1.19.2", "1.20.1")
+$supportedVersions = @("1.16.5", "1.19.2", "1.20.1", "1.20.4", "1.21.1", "1.21.4", "1.21.11")
 if ($supportedVersions -notcontains $MinecraftVersion) {
     throw "Fabric controller mod sources currently support Minecraft $($supportedVersions -join ', '). Add a controller variant before bundling $MinecraftVersion."
 }
@@ -68,18 +68,22 @@ if (Test-Path $controllerCoreJava) {
     $sources += @(Get-ChildItem $controllerCoreJava -Recurse -Filter "*.java" | Select-Object -ExpandProperty FullName)
 }
 
-$variantRoots = @{
-    "1.20.1" = "1.20.1"
+$variantLayers = @{
+    "1.20.1" = @("1.20.1")
+    "1.20.4" = @("1.20.4", "1.20.1")
+    "1.21.1" = @("1.21", "1.20.4", "1.20.1")
+    "1.21.4" = @("1.21.4", "1.21", "1.20.4", "1.20.1")
+    "1.21.11" = @("1.21.11", "1.21.4", "1.21", "1.20.4", "1.20.1")
 }
 $overlayNames = @(
     "BanditControllerCompat.java",
     "BanditControllerSettingsScreen.java",
+    "FabricScreenApi.java",
     "BanditControllerGameRendererMixin.java",
     "BanditControllerScreenMixin.java",
     "BanditControllerRecipeBookScreenMixin.java"
 )
-if ($variantRoots.ContainsKey($MinecraftVersion)) {
-    $variantRoot = Join-Path $PSScriptRoot ("src\variants\" + $variantRoots[$MinecraftVersion])
+if ($variantLayers.ContainsKey($MinecraftVersion)) {
     $sources = @($sources | Where-Object { $overlayNames -notcontains (Split-Path $_ -Leaf) })
     foreach ($name in $overlayNames) {
         $relative = if ($name -like "*Mixin.java") {
@@ -87,9 +91,16 @@ if ($variantRoots.ContainsKey($MinecraftVersion)) {
         } else {
             Join-Path "banditvault\fabriccontroller" $name
         }
-        $variantPath = Join-Path $variantRoot $relative
-        if (-not (Test-Path $variantPath)) {
-            throw "Missing Fabric controller variant source for ${MinecraftVersion}: $variantPath"
+        $variantPath = $null
+        foreach ($layer in $variantLayers[$MinecraftVersion]) {
+            $candidate = Join-Path (Join-Path $PSScriptRoot ("src\variants\" + $layer)) $relative
+            if (Test-Path $candidate) {
+                $variantPath = $candidate
+                break
+            }
+        }
+        if (-not $variantPath) {
+            throw "Missing Fabric controller variant source for ${MinecraftVersion}: $relative"
         }
         $sources += $variantPath
     }

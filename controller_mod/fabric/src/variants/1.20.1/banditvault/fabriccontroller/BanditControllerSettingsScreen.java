@@ -5,7 +5,6 @@ import net.minecraft.class_332;
 import net.minecraft.class_4185;
 import net.minecraft.class_437;
 import net.minecraft.class_2561;
-import org.lwjgl.glfw.GLFW;
 
 public final class BanditControllerSettingsScreen extends class_437 {
     private final class_437 parent;
@@ -22,18 +21,14 @@ public final class BanditControllerSettingsScreen extends class_437 {
 
     @Override
     public void method_25394(class_332 context, int mouseX, int mouseY, float delta) {
-        this.method_25420(context);
+        FabricScreenApi.renderBackground(this, context, mouseX, mouseY, delta);
         context.method_27534(this.field_22793, class_2561.method_30163("Bandit Controller"), this.field_22789 / 2, 18, 0xFFFFFF);
         super.method_25394(context, mouseX, mouseY, delta);
     }
 
     @Override
-    public boolean method_25404(int keyCode, int scanCode, int modifiers) {
-        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            close();
-            return true;
-        }
-        return super.method_25404(keyCode, scanCode, modifiers);
+    public void method_25419() {
+        close();
     }
 
     public void close() {

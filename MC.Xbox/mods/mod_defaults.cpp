@@ -705,20 +705,36 @@ static bool ConfigureDistantHorizonsDefaults(const std::wstring& gameDir, const 
     return true;
 }
 
-static bool UsesBundledBanditController(const std::wstring& minecraftVersion) {
-    return minecraftVersion == L"1.16.5" ||
-        minecraftVersion == L"1.19.2" ||
-        minecraftVersion == L"1.20.1";
+static bool DirectoryHasBanditController(const std::wstring& modsDir) {
+    if (modsDir.empty()) return false;
+    std::wstring controllerJar;
+    return FindModJarByFabricIdOrName(
+            modsDir,
+            L"banditvault_fabric_controller",
+            L"banditvault-fabric-controller",
+            controllerJar) ||
+        FindModJarByFabricIdOrName(
+            modsDir,
+            L"banditvault_forge_controller",
+            L"banditvault-forge-controller",
+            controllerJar);
 }
 
-void ConfigureKnownModDefaults(const std::wstring& gameDir, const std::wstring& userModsDir, const std::wstring& minecraftVersion) {
+void ConfigureKnownModDefaults(
+    const std::wstring& gameDir,
+    const std::wstring& userModsDir,
+    const std::wstring& minecraftVersion,
+    const std::wstring& bundledModsDir) {
     PatchMoonlightPoiMixin(gameDir, userModsDir, minecraftVersion);
     ConfigureSodiumDefaults(gameDir, userModsDir, minecraftVersion);
     ConfigureDistantHorizonsDefaults(gameDir, userModsDir);
     const bool hasLambdaControls = ConfigureLambdaControlsDefaults(gameDir, userModsDir);
     const bool hasMidnightControls = ConfigureMidnightControlsDefaults(gameDir, userModsDir);
     const bool legacyControllerMod =
-        hasLambdaControls || hasMidnightControls || UsesBundledBanditController(minecraftVersion);
+        hasLambdaControls ||
+        hasMidnightControls ||
+        DirectoryHasBanditController(userModsDir) ||
+        DirectoryHasBanditController(bundledModsDir);
     SetEnvironmentVariableW(L"MC_LEGACY_CONTROLLER_MOD", legacyControllerMod ? L"1" : L"0");
     WriteLogF(L"Legacy controller mod input mode: %s", legacyControllerMod ? L"enabled" : L"disabled");
 }
