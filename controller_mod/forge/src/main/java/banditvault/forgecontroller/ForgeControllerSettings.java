@@ -19,21 +19,23 @@ public final class ForgeControllerSettings {
     public float triggerDeadzone = 0.25f;
 
     private static final ForgeControllerSettings INSTANCE = new ForgeControllerSettings();
-    private static long lastLoadMs;
+    private static volatile boolean loaded;
 
     private ForgeControllerSettings() {
     }
 
     public static ForgeControllerSettings get() {
-        long now = System.currentTimeMillis();
-        if (now - lastLoadMs > 2000L) {
+        if (!loaded) {
             load();
         }
         return INSTANCE;
     }
 
-    public static void load() {
-        lastLoadMs = System.currentTimeMillis();
+    public static synchronized void load() {
+        if (loaded) {
+            return;
+        }
+        loaded = true;
         File file = configFile();
         if (!file.isFile()) {
             save();

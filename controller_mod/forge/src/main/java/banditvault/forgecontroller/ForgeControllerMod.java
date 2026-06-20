@@ -8,6 +8,7 @@ public final class ForgeControllerMod {
 
     public ForgeControllerMod() {
         ForgeControllerLog.log("Bandit Forge controller mod loaded (1.0.4)");
+        ForgeControllerSettings.load();
         ForgeControllerCompat.ensureInitialized();
     }
 }
