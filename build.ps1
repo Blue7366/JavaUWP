@@ -498,6 +498,10 @@ $forgeTargets = @(
     Import-Csv -Path $versionCatalogSource -Delimiter "`t" |
         Where-Object { $_.loader -eq "forge" -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
 )
+$neoForgeTargets = @(
+    Import-Csv -Path $versionCatalogSource -Delimiter "`t" |
+        Where-Object { $_.loader -eq "neoforge" -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
+)
 $manifestTargets = @(
     Import-Csv -Path $versionCatalogSource -Delimiter "`t" |
         Where-Object { $_.loader -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
@@ -512,6 +516,12 @@ function Test-FabricControllerTarget {
     param([Parameter(Mandatory = $true)]$Target)
 
     return $Target.loader -eq "fabric" -and $Target.controllerProvider -eq "fabric"
+}
+
+function Test-NeoForgeControllerTarget {
+    param([Parameter(Mandatory = $true)]$Target)
+
+    return $Target.loader -eq "neoforge" -and $Target.controllerProvider -eq "neoforge"
 }
 
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
@@ -691,6 +701,25 @@ if (-not $SkipVersionCompat) {
                 -OutputDir $outDir
         } catch {
             Write-Warning "Per-version Forge controller mod skipped for ${targetId}: $($_.Exception.Message)"
+            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
+        }
+    }
+    foreach ($row in $neoForgeTargets) {
+        $lv = $row.loaderVersion
+        $targetId = "$($row.minecraftVersion)-neoforge-$lv"
+        if (-not (Test-NeoForgeControllerTarget -Target $row)) {
+            Write-Host "Skipping per-version NeoForge controller mod for ${targetId}: no bundled controller provider for this target"
+            continue
+        }
+        $outDir = Join-Path $versionModsRoot $targetId
+        Write-Host "Building per-version NeoForge controller mod: $targetId"
+        try {
+            & (Join-Path $root "controller_mod\neoforge\build_neoforge_controller_mod.ps1") `
+                -MinecraftVersion $row.minecraftVersion `
+                -NeoForgeVersion $lv `
+                -OutputDir $outDir
+        } catch {
+            Write-Warning "Per-version NeoForge controller mod skipped for ${targetId}: $($_.Exception.Message)"
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
     }

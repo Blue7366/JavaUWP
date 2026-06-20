@@ -403,7 +403,7 @@ The build script:
 8. Copies patched Fabric Loader jars, patched TinyRemapper for legacy Fabric, the securejarhandler patch, bundled mods, log config, natives, Mesa/MobileGlues graphics DLLs, and the JREs.
 9. Generates `download_manifest.tsv` for the default official Minecraft/Fabric runtime downloads.
 10. Generates `runtime\manifests\<target-id>.tsv` for cataloged Fabric, Forge, and NeoForge targets.
-11. Builds per target compatibility mod jars and Forge controller mod jars under `runtime\version-mods`.
+11. Builds per target compatibility mod jars and Fabric, Forge, and NeoForge controller mod jars under `runtime\version-mods`.
 12. Generates UWP tile and splash assets from `MC.Xbox\Assets\Java_UWP_Icon.png`.
 13. Creates and signs `output\BanditLauncher_<appx-version>.appx`.
 14. Deletes `staging\package` unless `-KeepStaging` is set.

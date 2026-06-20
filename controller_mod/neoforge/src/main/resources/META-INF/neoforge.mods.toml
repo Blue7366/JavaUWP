@@ -1,0 +1,26 @@
+modLoader="javafml"
+loaderVersion="[3,)"
+license="MIT"
+
+[[mods]]
+modId="banditvault_neoforge_controller"
+version="1.0.0"
+displayName="Bandit NeoForge Controller"
+description='''Xbox-native controller support for Bandit Launcher on NeoForge.'''
+
+[[dependencies.banditvault_neoforge_controller]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.233,21.2)"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.banditvault_neoforge_controller]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.21.2)"
+ordering="NONE"
+side="CLIENT"
+
+[[mixins]]
+config="banditvault-neoforge-controller.mixins.json"

@@ -3,7 +3,7 @@ minecraftVersion	displayName	loader	loaderVersion	javaRuntime	supportLevel	contr
 1.21.4	1.21.4 Fabric	fabric	0.19.2	java21	testing	fabric	Anchor for 1.21.4 Fabric mods with bundled controller support
 1.21.4	1.21.4 NeoForge	neoforge	21.4.137	java21	experimental	none	Anchor for 1.21.4 NeoForge mods
 1.21.1	1.21.1 Fabric	fabric	0.19.2	java21	testing	fabric	Supports mods that pin Java 21 exactly; bundled controller support
-1.21.1	1.21.1 NeoForge	neoforge	21.1.233	java21	experimental	none	Playable experimental NeoForge target
+1.21.1	1.21.1 NeoForge	neoforge	21.1.233	java21	experimental	neoforge	Playable experimental NeoForge target with bundled controller support
 1.20.4	1.20.4 Fabric	fabric	0.19.2	java21	testing	fabric	Uses Java 21 for mods that reject newer JVM majors; bundled controller support
 1.20.4	1.20.4 NeoForge	neoforge	20.4.237	java17	experimental	none	1.20.4 modpack anchor; requires Java 17 runtime
 1.20.1	1.20.1 Fabric	fabric	0.19.2	java21	testing	fabric	Bundled Bandit controller layer; Java 21 runtime

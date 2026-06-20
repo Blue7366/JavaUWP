@@ -69,7 +69,7 @@ minecraft version + loader + loader version
 | --- | --- | --- |
 | `1.21.11 + Fabric 0.19.2` | Supported | Current default target with bundled controller support. Base game has been tested. |
 | `1.21.1 + Fabric 0.19.2` | Testing | Base game, bundled controller support, and Cobblemon have been verified. Uses Java 21 for mods that require it. |
-| `1.21.1 + NeoForge 21.1.233` | Experimental | Base game, Sodium, JEI, and Modrinth modpack installs have been tested. Uses Java 21. |
+| `1.21.1 + NeoForge 21.1.233` | Experimental | Base game, Sodium, JEI, and Modrinth modpack installs have been tested. Includes the bundled controller bridge and uses Java 21. |
 | `1.20.4 + Fabric 0.19.2` | Testing | Base game has been tested and includes bundled controller support. Uses Java 21. |
 | `1.20.1 + Fabric 0.19.2` | Testing | Bundled Bandit controller layer. Uses Java 21. Still needs broader testing. |
 | `1.20.1 + Forge 47.4.20` | Experimental | Initial Forge provider with bundled controller mod. Uses Java 21. |
@@ -103,7 +103,7 @@ Other catalog entries (additional Forge versions, older vanilla targets, and fut
 - Initial NeoForge 1.21.1 launch provider support.
 - Experimental Forge 1.20.1 launch provider support.
 - Built in Xbox compatibility mod with Minecraft and mod compatibility fixes.
-- Bundled Xbox controller mods under `controller_mod/` for legacy Fabric targets and Forge 1.20.1.
+- Bundled Xbox controller mods under `controller_mod/` for Fabric, Forge 1.20.1, and NeoForge 1.21.1.
 
 **Xbox integration**
 
@@ -111,7 +111,7 @@ Other catalog entries (additional Forge versions, older vanilla targets, and fut
 - Mesa based graphics path for Xbox Series consoles.
 - Separate Xbox One graphics runtime path when packaged.
 - GameInput based controller support through the GLFW shim.
-- Bundled Bandit controller layer for every supported Fabric target from `1.16.5` through `1.21.11`, plus `1.20.1` Forge.
+- Bundled Bandit controller layer for every supported Fabric target from `1.16.5` through `1.21.11`, `1.20.1` Forge, and `1.21.1` NeoForge.
 - Shared controller settings at `config/bandit-controller.properties` (deadzones, look speed, toggle crouch/sprint).
 
 **Diagnostics and file access**

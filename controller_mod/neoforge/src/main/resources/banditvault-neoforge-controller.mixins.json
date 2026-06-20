@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "banditvault.neoforgecontroller.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "NeoForgeControllerClientMixin",
+    "NeoForgeControllerGameRendererMixin",
+    "NeoForgeControllerHandledScreenMixin",
+    "NeoForgeControllerInventoryScreenMixin",
+    "NeoForgeControllerScreenMixin",
+    "NeoForgeControllerTitleScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
