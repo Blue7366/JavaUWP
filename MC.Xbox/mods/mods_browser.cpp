@@ -592,19 +592,18 @@ struct BlockedMod {
 // Mods known to break this UWP runtime. Match on filename token boundaries so
 // blocked mods do not also remove dependency libraries with similar names.
 static const BlockedMod kBlockedMods[] = {
-    { L"essential", L"Essential injects a launch transformer that crashes in the embedded/UWP runtime" },
     { L"crashassistant", L"Crash Assistant starts an external helper and hangs before GLFW startup" },
     { L"crash-assistant", L"Crash Assistant starts an external helper and hangs before GLFW startup" },
     { L"crash_assistant", L"Crash Assistant starts an external helper and hangs before GLFW startup" },
-    { L"rrls", L"Remove Reloading Screen failed config file canonical-path checks under LocalState" },
-    { L"remove-reloading-screen", L"Remove Reloading Screen failed config file canonical-path checks under LocalState" },
-    { L"iris", L"Iris rewrites shader/GPU texture setup and stalls on the Mesa/UWP render path" },
-    { L"ixeris", L"Ixeris replaces GLFW event polling/threading, which conflicts with the UWP GLFW shim" },
-    { L"puzzle", L"Puzzle applies splash/model mixins and currently hangs before the UWP GLFW shim loads" },
-    { L"lambdacontrols", L"LambdaControls conflicts with the bundled Bandit controller compatibility layer" },
+	{ L"flashback", L"Xbox does not have win32, which Flashback requires to run." },
+	{ L"ixeris", L"Ixeris replaces GLFW event polling/threading, which conflicts with the UWP GLFW shim" },
+	{ L"lambdacontrols", L"LambdaControls conflicts with the bundled Bandit controller compatibility layer" },
     { L"lambda-controls", L"LambdaControls conflicts with the bundled Bandit controller compatibility layer" },
     { L"midnightcontrols", L"MidnightControls conflicts with the bundled Bandit controller compatibility layer" },
     { L"midnight-controls", L"MidnightControls conflicts with the bundled Bandit controller compatibility layer" },
+	{ L"puzzle", L"Puzzle applies splash/model mixins and currently hangs before the UWP GLFW shim loads" },
+    { L"rrls", L"Remove Reloading Screen failed config file canonical-path checks under LocalState" },
+    { L"remove-reloading-screen", L"Remove Reloading Screen failed config file canonical-path checks under LocalState" },
 };
 
 static bool IsAsciiNameChar(wchar_t ch) {
