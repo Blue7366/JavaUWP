@@ -604,6 +604,8 @@ static const BlockedMod kBlockedMods[] = {
 	{ L"puzzle", L"Puzzle applies splash/model mixins and currently hangs before the UWP GLFW shim loads" },
     { L"rrls", L"Remove Reloading Screen failed config file canonical-path checks under LocalState" },
     { L"remove-reloading-screen", L"Remove Reloading Screen failed config file canonical-path checks under LocalState" },
+	{ L"xaeros-minimap", L"Exception Access Violation" },
+    { L"xaeros-world-map", L"Exception Access Violation" },
 };
 
 static bool IsAsciiNameChar(wchar_t ch) {
