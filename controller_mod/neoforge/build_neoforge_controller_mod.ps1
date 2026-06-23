@@ -100,6 +100,11 @@ function Invoke-Javac([string]$Name, [string[]]$Sources, [string]$Destination, [
 Invoke-Javac "compile-only" @($compileOnlySources.FullName) $compileOnlyDir $classpath
 Invoke-Javac "main" @($mainSources.FullName) $classesDir (@($compileOnlyDir) + $classpath)
 
+& (Join-Path $javaHome "bin\java.exe") -ea -cp $classesDir banditvault.controllercore.GridNavigation
+if ($LASTEXITCODE -ne 0) {
+    throw "NeoForge controller navigation self-check failed."
+}
+
 if (Test-Path (Join-Path $classesDir "net\neoforged")) {
     throw "NeoForge controller jar must not ship compile-only NeoForge API classes."
 }

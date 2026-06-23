@@ -4,9 +4,9 @@ import banditvault.controllercore.ControllerAxis;
 import banditvault.controllercore.ControllerButton;
 import banditvault.controllercore.ControllerRuntime;
 import banditvault.controllercore.ControllerState;
+import banditvault.controllercore.GridNavigation;
+import banditvault.neoforgecontroller.mixin.NeoForgeControllerContainerAccessor;
 import com.mojang.blaze3d.platform.InputConstants;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
@@ -30,11 +30,10 @@ public final class NeoForgeControllerCompat {
 
     private static final GLFWGamepadState GLFW_STATE = GLFWGamepadState.create();
     private static final ControllerState CONTROLLER_STATE = new ControllerState();
-    private static final ReflectionCache REFLECTION = new ReflectionCache();
+    private static final NeoForgeMenuNavigation MENU_NAVIGATION = new NeoForgeMenuNavigation();
 
     private static boolean active;
     private static boolean loggedReady;
-    private static boolean loggedScreenReflectionFailure;
     private static boolean loggedNoGamepad;
     private static boolean loggedInit;
     private static long tickCount;
@@ -42,9 +41,12 @@ public final class NeoForgeControllerCompat {
     private static boolean sprintToggled;
     private static double cursorX = -1.0;
     private static double cursorY = -1.0;
+    private static double renderedCursorX = -1.0;
+    private static double renderedCursorY = -1.0;
     private static int scrollCooldown;
     private static long lastLookNanos;
     private static long lastScreenCursorNanos;
+    private static long lastRenderedCursorNanos;
     private static long renderFrameActiveNanos;
     private static boolean loggedLookApplied;
     private static Object lastCursorScreen;
@@ -52,6 +54,13 @@ public final class NeoForgeControllerCompat {
     private static double lastRelayCursorX = Double.NaN;
     private static double lastRelayCursorY = Double.NaN;
     private static boolean relayOwnsCursor;
+    private static boolean snapStickLatched;
+    private static CursorMode cursorMode = CursorMode.SNAP;
+
+    private enum CursorMode {
+        SNAP,
+        FREE
+    }
 
     private NeoForgeControllerCompat() {
     }
@@ -136,14 +145,15 @@ public final class NeoForgeControllerCompat {
     }
 
     public static void renderCursor(Screen screen, GuiGraphics graphics) {
-        if (!active || screen == null || graphics == null) {
+        Minecraft client = Minecraft.getInstance();
+        if (!active || screen == null || graphics == null || client == null || client.screen != screen) {
             return;
         }
-        if (relayOwnsCursor || cursorX < 0.0 || cursorY < 0.0) {
+        if (relayOwnsCursor || renderedCursorX < 0.0 || renderedCursorY < 0.0) {
             return;
         }
-        int x = (int) Math.round(cursorX);
-        int y = (int) Math.round(cursorY);
+        int x = (int) Math.round(renderedCursorX);
+        int y = (int) Math.round(renderedCursorY);
         graphics.pose().pushPose();
         graphics.pose().translate(0.0, 0.0, 1000.0);
         graphics.fill(x - 3, y - 3, x + 4, y + 4, 0x66000000);
@@ -164,19 +174,30 @@ public final class NeoForgeControllerCompat {
         observeRelayCursor(screen);
         if (relayOwnsCursor) {
             invokeScreenMouseMoved(screen, lastRelayCursorX, lastRelayCursorY);
+            lastRenderedCursorNanos = System.nanoTime();
+            return;
         }
-        updateScreenCursor(Minecraft.getInstance(), screen, true);
+        if (cursorMode == CursorMode.FREE) {
+            updateScreenCursor(Minecraft.getInstance(), screen, true);
+            renderedCursorX = cursorX;
+            renderedCursorY = cursorY;
+        } else {
+            advanceRenderedCursor();
+            invokeScreenMouseMoved(screen, cursorX, cursorY);
+        }
     }
 
-    public static int screenMouseX(int fallback) {
-        if (!active || relayOwnsCursor || cursorX < 0.0) {
+    public static int screenMouseX(Screen screen, int fallback) {
+        Minecraft client = Minecraft.getInstance();
+        if (!active || relayOwnsCursor || cursorX < 0.0 || client == null || client.screen != screen) {
             return fallback;
         }
         return (int) Math.round(cursorX);
     }
 
-    public static int screenMouseY(int fallback) {
-        if (!active || relayOwnsCursor || cursorY < 0.0) {
+    public static int screenMouseY(Screen screen, int fallback) {
+        Minecraft client = Minecraft.getInstance();
+        if (!active || relayOwnsCursor || cursorY < 0.0 || client == null || client.screen != screen) {
             return fallback;
         }
         return (int) Math.round(cursorY);
@@ -216,11 +237,6 @@ public final class NeoForgeControllerCompat {
             return;
         }
         NeoForgeControllerKeys keys = new NeoForgeControllerKeys(options);
-
-        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_BACK)) {
-            client.setScreen(new NeoForgeControllerSettingsScreen(null));
-            return;
-        }
 
         float lx = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
         float ly = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
@@ -293,34 +309,72 @@ public final class NeoForgeControllerCompat {
         ensureScreenCursor(screen);
         float ry = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
 
+        if (cursorMode == CursorMode.SNAP && !relayOwnsCursor) {
+            applySnapTarget(screen, MENU_NAVIGATION.synchronize(screen, cursorX, cursorY));
+        }
+
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_BACK)) {
-            if (screen instanceof NeoForgeControllerSettingsScreen) {
-                ((NeoForgeControllerSettingsScreen) screen).close();
+            takeControllerCursor();
+            cursorMode = cursorMode == CursorMode.SNAP ? CursorMode.FREE : CursorMode.SNAP;
+            snapStickLatched = false;
+            MENU_NAVIGATION.reset(screen);
+            if (cursorMode == CursorMode.SNAP) {
+                applySnapTarget(screen, MENU_NAVIGATION.discover(screen, cursorX, cursorY));
             } else {
-                client.setScreen(new NeoForgeControllerSettingsScreen(screen));
+                renderedCursorX = cursorX;
+                renderedCursorY = cursorY;
             }
+            NeoForgeControllerLog.log("Menu cursor mode changed to " + cursorMode + " screen=" + screen.getClass().getName());
             return;
         }
 
-        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_A)) {
-            invokeScreenMousePressed(screen, cursorX, cursorY, LEFT_CLICK);
+        if (cursorMode == CursorMode.SNAP) {
+            GridNavigation.Direction direction = snapDirection();
+            if (direction != null) {
+                takeControllerCursor();
+                applySnapTarget(screen, MENU_NAVIGATION.move(screen, direction, cursorX, cursorY));
+            }
+        } else {
+            snapStickLatched = false;
         }
-        if (released(GLFW.GLFW_GAMEPAD_BUTTON_A)) {
+
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_A)) {
+            takeControllerCursor();
+            if (cursorMode == CursorMode.SNAP && MENU_NAVIGATION.usesNativeActivation(screen)) {
+                invokeScreenKeyPressed(screen, GLFW.GLFW_KEY_ENTER, 0, 0);
+            } else {
+                invokeScreenMousePressed(screen, cursorX, cursorY, LEFT_CLICK);
+            }
+        }
+        if (released(GLFW.GLFW_GAMEPAD_BUTTON_A) &&
+            (cursorMode == CursorMode.FREE || !MENU_NAVIGATION.usesNativeActivation(screen))) {
             invokeScreenMouseReleased(screen, cursorX, cursorY, LEFT_CLICK);
         }
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_X)) {
+            takeControllerCursor();
             invokeScreenMousePressed(screen, cursorX, cursorY, RIGHT_CLICK);
         }
         if (released(GLFW.GLFW_GAMEPAD_BUTTON_X)) {
             invokeScreenMouseReleased(screen, cursorX, cursorY, RIGHT_CLICK);
         }
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_B)) {
-            if (!invokeScreenKeyPressed(screen, GLFW.GLFW_KEY_ESCAPE, 0, 0)) {
-                client.setScreen(null);
+            takeControllerCursor();
+            if (MENU_NAVIGATION.handleBack(screen)) {
+                if (cursorMode == CursorMode.SNAP) {
+                    applySnapTarget(screen, MENU_NAVIGATION.discover(screen, cursorX, cursorY));
+                }
+            } else {
+                invokeScreenKeyPressed(screen, GLFW.GLFW_KEY_ESCAPE, 0, 0);
             }
+            return;
         }
         if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_Y)) {
+            takeControllerCursor();
             quickMoveFocusedSlot(screen);
+        }
+
+        if (client.screen != screen) {
+            return;
         }
 
         if (scrollCooldown > 0) {
@@ -328,9 +382,9 @@ public final class NeoForgeControllerCompat {
         }
         if (scrollCooldown == 0) {
             double scroll = 0.0;
-            if (ry < -0.35f || button(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_UP)) {
+            if (ry < -0.35f || (cursorMode == CursorMode.FREE && button(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_UP))) {
                 scroll = settings.scrollAmount;
-            } else if (ry > 0.35f || button(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_DOWN)) {
+            } else if (ry > 0.35f || (cursorMode == CursorMode.FREE && button(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_DOWN))) {
                 scroll = -settings.scrollAmount;
             }
             if (scroll != 0.0) {
@@ -344,14 +398,74 @@ public final class NeoForgeControllerCompat {
         if (screen != lastCursorScreen) {
             lastCursorScreen = screen;
             lastScreenCursorNanos = 0L;
+            lastRenderedCursorNanos = 0L;
             cursorX = Math.max(1, screen.width / 2);
             cursorY = Math.max(1, screen.height / 2);
+            renderedCursorX = cursorX;
+            renderedCursorY = cursorY;
+            snapStickLatched = false;
+            MENU_NAVIGATION.reset(screen);
+            if (cursorMode == CursorMode.SNAP) {
+                applySnapTarget(screen, MENU_NAVIGATION.discover(screen, cursorX, cursorY));
+            }
             return;
         }
         if (cursorX < 0.0 || cursorY < 0.0) {
             cursorX = Math.max(1, screen.width / 2);
             cursorY = Math.max(1, screen.height / 2);
+            renderedCursorX = cursorX;
+            renderedCursorY = cursorY;
         }
+    }
+
+    private static GridNavigation.Direction snapDirection() {
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_UP)) return GridNavigation.Direction.UP;
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_DOWN)) return GridNavigation.Direction.DOWN;
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_LEFT)) return GridNavigation.Direction.LEFT;
+        if (pressed(GLFW.GLFW_GAMEPAD_BUTTON_DPAD_RIGHT)) return GridNavigation.Direction.RIGHT;
+
+        float x = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
+        float y = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
+        if (Math.max(Math.abs(x), Math.abs(y)) < 0.35f) {
+            snapStickLatched = false;
+            return null;
+        }
+        if (snapStickLatched || Math.max(Math.abs(x), Math.abs(y)) < 0.65f) {
+            return null;
+        }
+        snapStickLatched = true;
+        if (Math.abs(x) > Math.abs(y)) {
+            return x < 0.0f ? GridNavigation.Direction.LEFT : GridNavigation.Direction.RIGHT;
+        }
+        return y < 0.0f ? GridNavigation.Direction.UP : GridNavigation.Direction.DOWN;
+    }
+
+    private static void applySnapTarget(Screen screen, NeoForgeMenuNavigation.Position position) {
+        if (screen == null || position == null) {
+            return;
+        }
+        cursorX = clamp(position.x, 0.0, Math.max(1, screen.width - 1));
+        cursorY = clamp(position.y, 0.0, Math.max(1, screen.height - 1));
+        invokeScreenMouseMoved(screen, cursorX, cursorY);
+    }
+
+    private static void advanceRenderedCursor() {
+        long now = System.nanoTime();
+        double seconds = 1.0 / 60.0;
+        if (lastRenderedCursorNanos != 0L) {
+            seconds = (now - lastRenderedCursorNanos) / 1000000000.0;
+            seconds = clamp(seconds, 0.0, 1.0 / 20.0);
+        }
+        lastRenderedCursorNanos = now;
+        double blend = 1.0 - Math.exp(-18.0 * seconds);
+        renderedCursorX += (cursorX - renderedCursorX) * blend;
+        renderedCursorY += (cursorY - renderedCursorY) * blend;
+        if (Math.abs(renderedCursorX - cursorX) < 0.05) renderedCursorX = cursorX;
+        if (Math.abs(renderedCursorY - cursorY) < 0.05) renderedCursorY = cursorY;
+    }
+
+    private static void takeControllerCursor() {
+        relayOwnsCursor = false;
     }
 
     private static void updateScreenCursor(Minecraft client, Screen screen, boolean frameTimed) {
@@ -368,7 +482,7 @@ public final class NeoForgeControllerCompat {
                 lastScreenCursorNanos = System.nanoTime();
                 return;
             }
-            relayOwnsCursor = false;
+            takeControllerCursor();
         }
         double dx = shapedCursorAxis(rawX, settings.cursorDeadzone);
         double dy = shapedCursorAxis(rawY, settings.cursorDeadzone);
@@ -416,6 +530,9 @@ public final class NeoForgeControllerCompat {
 
         if (Math.abs(mouseX - lastRelayCursorX) > RELAY_CURSOR_MOVE_EPSILON ||
             Math.abs(mouseY - lastRelayCursorY) > RELAY_CURSOR_MOVE_EPSILON) {
+            if (!relayOwnsCursor) {
+                screen.clearFocus();
+            }
             relayOwnsCursor = true;
         }
         lastRelayCursorX = mouseX;
@@ -521,21 +638,14 @@ public final class NeoForgeControllerCompat {
         if (!(screen instanceof AbstractContainerScreen)) {
             return;
         }
-        if (REFLECTION.hoveredSlotField == null || REFLECTION.slotClickedMethod == null) {
+        AbstractContainerScreen<?> container = (AbstractContainerScreen<?>) screen;
+        Slot slot = cursorMode == CursorMode.SNAP
+            ? MENU_NAVIGATION.selectedSlot(screen)
+            : container.getSlotUnderMouse();
+        if (slot == null || !slot.hasItem()) {
             return;
         }
-        try {
-            Slot slot = (Slot) REFLECTION.hoveredSlotField.get(screen);
-            if (slot == null || !slot.hasItem()) {
-                return;
-            }
-            REFLECTION.slotClickedMethod.invoke(screen, slot, slot.index, 0, ClickType.QUICK_MOVE);
-        } catch (ReflectiveOperationException t) {
-            if (!loggedScreenReflectionFailure) {
-                loggedScreenReflectionFailure = true;
-                NeoForgeControllerLog.logException("NeoForge controller compat failed to quick-move focused slot", t);
-            }
-        }
+        ((NeoForgeControllerContainerAccessor) container).banditvault$slotClicked(slot, slot.index, 0, ClickType.QUICK_MOVE);
     }
 
     private static void invokeScreenMouseMoved(Screen screen, double x, double y) {
@@ -643,67 +753,15 @@ public final class NeoForgeControllerCompat {
         }
     }
 
-    private static Method findMethod(Class<?> type, String name, Class<?>... parameterTypes) {
-        Class<?> current = type;
-        while (current != null) {
-            try {
-                Method method = current.getDeclaredMethod(name, parameterTypes);
-                method.setAccessible(true);
-                return method;
-            } catch (NoSuchMethodException ignored) {
-            }
-            for (Class<?> iface : current.getInterfaces()) {
-                Method method = findMethod(iface, name, parameterTypes);
-                if (method != null) {
-                    return method;
-                }
-            }
-            current = current.getSuperclass();
-        }
-        return null;
-    }
-
-    private static Field findField(Class<?> type, String name) {
-        Class<?> current = type;
-        while (current != null) {
-            try {
-                Field field = current.getDeclaredField(name);
-                field.setAccessible(true);
-                return field;
-            } catch (NoSuchFieldException ignored) {
-                current = current.getSuperclass();
-            }
-        }
-        return null;
-    }
-
-    private static final class ReflectionCache {
-        private boolean loggedMissingBindings;
-
-        private final Field hoveredSlotField = findField(AbstractContainerScreen.class, "hoveredSlot");
-        private final Method slotClickedMethod = findMethod(AbstractContainerScreen.class, "slotClicked",
-            Slot.class, int.class, int.class, ClickType.class);
-
-        private ReflectionCache() {
-            logMissingBindingsOnce();
-        }
-
-        private void logMissingBindingsOnce() {
-            if (loggedMissingBindings) {
-                return;
-            }
-            loggedMissingBindings = true;
-            if (hoveredSlotField == null || slotClickedMethod == null) {
-                NeoForgeControllerLog.log("NeoForge controller inventory bindings incomplete; quick move may be limited");
-            }
-        }
-    }
-
     public static Component textLiteral(String text) {
         return Component.literal(text);
     }
 
     public static Button createButton(int x, int y, int w, int h, String label, Button.OnPress onPress) {
         return Button.builder(textLiteral(label), onPress).bounds(x, y, w, h).build();
+    }
+
+    public static Screen createSettingsScreen(Screen parent) {
+        return new NeoForgeControllerSettingsScreen(parent);
     }
 }

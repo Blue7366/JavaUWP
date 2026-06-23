@@ -1042,6 +1042,14 @@ static unsigned char GamepadButton(GameInputGamepadButtons buttons, GameInputGam
     return (buttons & mask) ? GLFW_PRESS : GLFW_RELEASE;
 }
 
+static bool GamepadHasMenuCursorIntent(const GameInputGamepadState& state) {
+    return state.buttons != GameInputGamepadNone ||
+        state.leftTrigger >= kControllerCursorTakeoverThreshold ||
+        state.rightTrigger >= kControllerCursorTakeoverThreshold ||
+        (std::max)(AbsGamepadAxis(state.leftThumbstickX), AbsGamepadAxis(state.leftThumbstickY)) >=
+            kControllerCursorTakeoverThreshold;
+}
+
 static void ConvertGameInputGamepadState(const GameInputGamepadState& state) {
     ClearGamepadState();
 
@@ -1114,10 +1122,7 @@ static bool PollGameInputGamepad(bool fireCallbacks) {
 
     ConvertGameInputGamepadState(state);
     if (g_cursorMode != GLFW_CURSOR_DISABLED && CurrentCursorInputOwner() == CursorInputOwnerRelay) {
-        const float cursorAxis = (std::max)(
-            AbsGamepadAxis(state.leftThumbstickX),
-            AbsGamepadAxis(state.leftThumbstickY));
-        if (cursorAxis >= kControllerCursorTakeoverThreshold) {
+        if (GamepadHasMenuCursorIntent(state)) {
             SetCursorInputOwner(CursorInputOwnerController);
             SendCursorOverlayState();
         }

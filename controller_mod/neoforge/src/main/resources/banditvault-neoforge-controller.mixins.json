@@ -5,9 +5,15 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "NeoForgeControllerClientMixin",
+    "NeoForgeControllerContainerAccessor",
+    "NeoForgeControllerControlsScreenMixin",
     "NeoForgeControllerGameRendererMixin",
     "NeoForgeControllerHandledScreenMixin",
     "NeoForgeControllerInventoryScreenMixin",
+    "NeoForgeControllerOptionsSubScreenAccessor",
+    "NeoForgeControllerRecipeBookAccessor",
+    "NeoForgeControllerRecipeBookPageAccessor",
+    "NeoForgeControllerRecipeOverlayAccessor",
     "NeoForgeControllerScreenMixin",
     "NeoForgeControllerTitleScreenMixin"
   ],

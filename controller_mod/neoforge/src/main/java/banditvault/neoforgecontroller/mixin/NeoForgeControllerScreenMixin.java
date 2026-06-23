@@ -18,12 +18,12 @@ public abstract class NeoForgeControllerScreenMixin {
 
     @ModifyVariable(method = "render", at = @At("HEAD"), ordinal = 0, argsOnly = true, remap = false)
     private int banditvault$useControllerMouseX(int mouseX) {
-        return NeoForgeControllerCompat.screenMouseX(mouseX);
+        return NeoForgeControllerCompat.screenMouseX((Screen) (Object) this, mouseX);
     }
 
     @ModifyVariable(method = "render", at = @At("HEAD"), ordinal = 1, argsOnly = true, remap = false)
     private int banditvault$useControllerMouseY(int mouseY) {
-        return NeoForgeControllerCompat.screenMouseY(mouseY);
+        return NeoForgeControllerCompat.screenMouseY((Screen) (Object) this, mouseY);
     }
 
     @Inject(method = "render", at = @At("TAIL"), remap = false)
