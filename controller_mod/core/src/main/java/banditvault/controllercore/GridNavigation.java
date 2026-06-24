@@ -33,10 +33,7 @@ public final class GridNavigation {
             return -1;
         }
 
-        if (direction == Direction.LEFT || direction == Direction.RIGHT) {
-            return findAligned(points, current, direction);
-        }
-        return findOnNextRow(points, current, direction);
+        return findDirectional(points, current, direction);
     }
 
     public static int nextLoose(List<Point> points, int currentId, Direction direction) {
@@ -48,6 +45,10 @@ public final class GridNavigation {
         if (aligned >= 0) {
             return aligned;
         }
+        return findDirectional(points, current, direction);
+    }
+
+    private static int findDirectional(List<Point> points, Point current, Direction direction) {
         Point best = null;
         long bestScore = Long.MAX_VALUE;
         for (Point candidate : points) {
@@ -60,7 +61,7 @@ public final class GridNavigation {
             int cross = isHorizontal(direction)
                 ? Math.abs(candidate.y - current.y)
                 : Math.abs(candidate.x - current.x);
-            long score = (long) primary * primary + (long) cross * cross * 3L;
+            long score = (long) primary * primary + (long) cross * cross * 4L;
             if (score < bestScore) {
                 best = candidate;
                 bestScore = score;
@@ -102,33 +103,6 @@ public final class GridNavigation {
         return best == null ? -1 : best.id;
     }
 
-    private static int findOnNextRow(List<Point> points, Point current, Direction direction) {
-        int nextRowDistance = Integer.MAX_VALUE;
-        for (Point candidate : points) {
-            if (candidate.id != current.id && isAhead(current, candidate, direction)) {
-                nextRowDistance = Math.min(nextRowDistance, Math.abs(candidate.y - current.y));
-            }
-        }
-        if (nextRowDistance == Integer.MAX_VALUE) {
-            return -1;
-        }
-
-        Point best = null;
-        int bestColumnDistance = Integer.MAX_VALUE;
-        for (Point candidate : points) {
-            int rowDistance = Math.abs(candidate.y - current.y);
-            if (!isAhead(current, candidate, direction) || Math.abs(rowDistance - nextRowDistance) > ALIGN_TOLERANCE) {
-                continue;
-            }
-            int columnDistance = Math.abs(candidate.x - current.x);
-            if (columnDistance < bestColumnDistance) {
-                best = candidate;
-                bestColumnDistance = columnDistance;
-            }
-        }
-        return best == null ? -1 : best.id;
-    }
-
     private static boolean isAhead(Point current, Point candidate, Direction direction) {
         switch (direction) {
             case UP: return candidate.y < current.y;
@@ -161,5 +135,15 @@ public final class GridNavigation {
         assert next(grid, 4, Direction.DOWN) == 7;
         assert next(grid, 0, Direction.LEFT) == -1;
         assert nextLoose(grid, 3, Direction.RIGHT) == 4;
+
+        java.util.List<Point> inventory = java.util.Arrays.asList(
+            new Point(0, 8, 44),
+            new Point(1, 8, 26),
+            new Point(2, 98, 18),
+            new Point(3, 98, 36),
+            new Point(4, 154, 28));
+        assert next(inventory, 0, Direction.UP) == 1;
+        assert next(inventory, 1, Direction.RIGHT) == 2;
+        assert next(inventory, 4, Direction.LEFT) == 3;
     }
 }

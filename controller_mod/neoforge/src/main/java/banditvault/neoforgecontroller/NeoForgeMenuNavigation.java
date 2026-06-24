@@ -149,6 +149,18 @@ final class NeoForgeMenuNavigation {
                 return null;
             }
             if (region == Region.NATIVE_WIDGET) {
+                if (recipeBook != null && recipeBook.isVisible() && !isNarrow(currentScreen) &&
+                    direction == GridNavigation.Direction.LEFT) {
+                    Position recipe = selectRecipeBoundary(
+                        currentScreen,
+                        recipeTargets(recipeBook),
+                        fromY,
+                        false,
+                        Region.RECIPE_BOOK);
+                    if (recipe != null) {
+                        return recipe;
+                    }
+                }
                 Position nativePosition = moveNative(currentScreen, direction, false);
                 if (nativePosition != null) {
                     return nativePosition;
@@ -178,8 +190,7 @@ final class NeoForgeMenuNavigation {
             region = Region.NONE;
             return discover(currentScreen, fromX, fromY);
         }
-        if (recipeBook != null && recipeBook.isVisible() &&
-            (isNarrow(currentScreen) || region == Region.NATIVE_WIDGET)) {
+        if (recipeBook != null && recipeBook.isVisible() && isNarrow(currentScreen)) {
             List<AbstractWidget> targets = recipeTargets(recipeBook);
             if (region != Region.RECIPE_BOOK || !targets.contains(recipeWidget)) {
                 return selectRecipeTarget(currentScreen, targets, fromX, fromY, Region.RECIPE_BOOK);
