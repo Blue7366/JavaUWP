@@ -690,7 +690,6 @@ static bool SelectGraphicsRuntimeDir(
 
     wchar_t requested[32];
     GetGraphicsRuntimeName(requested, (int)(sizeof(requested) / sizeof(requested[0])));
-    g_graphicsRuntimeUsesGles = (_wcsicmp(requested, L"xboxone") == 0);
 
     wchar_t candidate[MAX_PATH];
     swprintf_s(candidate, L"%s\\graphics\\%s", exeDir, requested);
@@ -3602,9 +3601,7 @@ static void* Resolve(const char* name) {
     void* p = nullptr;
     if (wglb::Active()) p = wglb::GetProc(name);
     if (!p && p_eglGetProcAddress) p = p_eglGetProcAddress(name);
-    if (!p && g_graphicsRuntimeUsesGles && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     if (!p && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
-    if (!p && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     return p;
 }
 
@@ -3672,20 +3669,12 @@ static bool LoadFns() {
 static bool Init() {
     if (!LoadFns()) return false;
 
-    const char* vs = g_graphicsRuntimeUsesGles
-        ? "#version 300 es\n"
-          "in vec2 aPos;in vec4 aColor;out vec4 vColor;"
-          "void main(){vColor=aColor;gl_Position=vec4(aPos,0.0,1.0);}"
-        : "#version 150 core\n"
-          "in vec2 aPos;in vec4 aColor;out vec4 vColor;"
-          "void main(){vColor=aColor;gl_Position=vec4(aPos,0.0,1.0);}";
-    const char* fs = g_graphicsRuntimeUsesGles
-        ? "#version 300 es\n"
-          "precision mediump float;in vec4 vColor;out vec4 fragColor;"
-          "void main(){fragColor=vColor;}"
-        : "#version 150 core\n"
-          "in vec4 vColor;out vec4 fragColor;"
-          "void main(){fragColor=vColor;}";
+    const char* vs = "#version 150 core\n"
+        "in vec2 aPos;in vec4 aColor;out vec4 vColor;"
+        "void main(){vColor=aColor;gl_Position=vec4(aPos,0.0,1.0);}";
+    const char* fs = "#version 150 core\n"
+        "in vec4 vColor;out vec4 fragColor;"
+        "void main(){fragColor=vColor;}";
 
     GLuint v = CompileShader(GL_C_VERTEX_SHADER, vs);
     GLuint f = CompileShader(GL_C_FRAGMENT_SHADER, fs);
@@ -3721,7 +3710,7 @@ static bool Init() {
     p_enableVaa((GLuint)g_locColor);
     p_vaPointer((GLuint)g_locColor, 4, GL_C_FLOAT, 0, stride, (const void*)(2 * sizeof(GLfloat)));
     p_bindVao(0);
-    ShimLog("Mouse cursor overlay initialized (%s)", g_graphicsRuntimeUsesGles ? "GLES3" : "OpenGL 3.2 core");
+    ShimLog("Mouse cursor overlay initialized (OpenGL 3.2 core)");
     return true;
 }
 
@@ -3842,11 +3831,8 @@ extern "C" __declspec(dllexport) int glfwExtensionSupported(const char* name) {
 extern "C" __declspec(dllexport) void* glfwGetProcAddress(const char* name) {
     void* p = NULL;
     if (wglb::Active()) p = wglb::GetProc(name);
-    if (!p && g_graphicsRuntimeUsesGles && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
-    if (!p && g_graphicsRuntimeUsesGles && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     if (!p && p_eglGetProcAddress) p = p_eglGetProcAddress(name);
     if (!p && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
-    if (!p && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     if (!p && g_libEGL) p = (void*)GetProcAddress(g_libEGL, name);
     if (g_proc_log_count < 200) {
         ++g_proc_log_count;

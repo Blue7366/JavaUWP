@@ -44,8 +44,7 @@ static std::wstring RuntimeSeedStamp(const std::wstring& packageDir) {
         L"logConfig=" + FileStamp(packageDir + L"\\runtime\\log_configs\\client-uwp.xml") + L"\n" +
         L"nativeGlfw=" + FileStamp(packageDir + L"\\natives\\glfw.dll") + L"\n" +
         L"nativeLwjgl=" + FileStamp(packageDir + L"\\natives\\lwjgl.dll") + L"\n" +
-        L"mesaOpenGl=" + FileStamp(packageDir + L"\\graphics\\mesa\\opengl32.dll") + L"\n" +
-        L"xboxOneOpenGl=" + FileStamp(packageDir + L"\\graphics\\xboxone\\opengl32.dll") + L"\n";
+        L"mesaOpenGl=" + FileStamp(packageDir + L"\\graphics\\mesa\\opengl32.dll") + L"\n";
 }
 
 bool IsLocalRuntimeSeedCurrent(const std::wstring& packageDir, const std::wstring& localDir) {
@@ -405,7 +404,6 @@ void ArchiveCurrentLogsToPrevious(const std::wstring& runtimeRoot) {
         L"java_output.log",
         L"stderr_stream.log",
         L"glfw_uwp.log",
-        L"xboxone_gl_proxy.log",
         L"java_args.txt",
         L"hwnd.txt"
     };
@@ -971,12 +969,6 @@ std::wstring DetectGraphicsRuntimeName() {
         WriteLogF(L"Device product: %s", productName.c_str());
         WriteLogF(L"Device SKU: %s", sku.c_str());
         WriteLogF(L"Device friendly name: %s", friendlyName.c_str());
-
-        if (ContainsInsensitive(probe, L"xbox one") ||
-            ContainsInsensitive(probe, L"xboxone") ||
-            ContainsInsensitive(probe, L"durango")) {
-            return L"xboxone";
-        }
 
         if (ContainsInsensitive(probe, L"xbox series") ||
             ContainsInsensitive(probe, L"scarlett") ||

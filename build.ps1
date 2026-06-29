@@ -1,7 +1,6 @@
 # build.ps1 - Build and package MC Java UWP
 param(
     [string]$MesaRuntimeDir = $env:MESA_UWP_DIR,
-    [string]$XboxOneGraphicsRuntimeDir = $env:XBOX_ONE_GRAPHICS_RUNTIME_DIR,
     [string]$McVersion,
     [string]$FabricLoader,
     [string]$AssetIndex,
@@ -36,10 +35,8 @@ $nativesSourceDir = Get-ConfigPath "NativesDir"
 $certDir = Get-ConfigPath "CertificateDir"
 $mcBuildDir = Join-Path $buildDir "MC.Xbox"
 $glfwBuildDir = Join-Path $buildDir "glfw_shim"
-$xboxOneGlProxyBuildDir = Join-Path $buildDir "xboxone_gl_proxy"
 $mcExe = Join-Path $mcBuildDir "MC.Xbox.exe"
 $shimDll = Join-Path $glfwBuildDir "glfw.dll"
-$xboxOneGlProxyDll = Join-Path $xboxOneGlProxyBuildDir "opengl32.dll"
 $jreSrc = Resolve-JavaHome
 $jre21Src = Resolve-JavaHomeExact -MajorVersion 21
 $jarExe = Join-Path $jreSrc "bin\jar.exe"
@@ -331,10 +328,6 @@ Write-Host "=== Building GLFW CoreWindow shim ==="
 & (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
 
-Write-Host "=== Building Xbox One OpenGL proxy ==="
-& (Join-Path $root "xboxone_gl_proxy\build_proxy.ps1") -OutputDir $xboxOneGlProxyBuildDir
-if (-not (Test-Path $xboxOneGlProxyDll)) { throw "Xbox One OpenGL proxy DLL missing after build: $xboxOneGlProxyDll" }
-
 Write-Host "=== Building Xbox compatibility mod ==="
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
@@ -352,7 +345,6 @@ Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "Assets") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "natives") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "graphics\mesa") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $pkg "graphics\xboxone") | Out-Null
 # runtime/ holds only launcher-owned or intentionally patched runtime pieces.
 # Mojang/Fabric game files are downloaded into LocalState after auth.
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "runtime") | Out-Null
@@ -579,40 +571,6 @@ foreach ($dll in Get-MesaRuntimeDllNames) {
         Copy-Item $source (Join-Path $pkg "natives\$dll") -Force
         Copy-Item $source (Join-Path $pkg "graphics\mesa\$dll") -Force
         Write-Host "Mesa: $dll"
-    }
-}
-
-Write-Host "Copying Xbox One graphics runtime..."
-$xboxOneRuntime = Resolve-XboxOneGraphicsRuntimeDir -XboxOneGraphicsRuntimeDir $XboxOneGraphicsRuntimeDir
-if ($xboxOneRuntime) {
-    Write-Host "Xbox One graphics runtime source: $xboxOneRuntime"
-    foreach ($dll in Get-XboxOneGraphicsRuntimeDllNames) {
-        if ($dll -eq "opengl32.dll") { continue }
-        $source = Join-Path $xboxOneRuntime $dll
-        if (Test-Path $source) {
-            Copy-Item $source (Join-Path $pkg "graphics\xboxone\$dll") -Force
-            Write-Host "Xbox One graphics: $dll"
-        }
-    }
-    $mobileGluesSource = Join-Path $xboxOneRuntime "mobileglues.dll"
-    if (-not (Test-Path $mobileGluesSource)) {
-        $mobileGluesSource = Join-Path $xboxOneRuntime "opengl32.dll"
-    }
-    if (-not (Test-Path $mobileGluesSource)) {
-        throw "Xbox One MobileGlues binary missing. Expected mobileglues.dll or opengl32.dll in $xboxOneRuntime"
-    }
-    Copy-Item $mobileGluesSource (Join-Path $pkg "graphics\xboxone\mobileglues.dll") -Force
-    Write-Host "Xbox One graphics: mobileglues.dll"
-    Copy-Item $xboxOneGlProxyDll (Join-Path $pkg "graphics\xboxone\opengl32.dll") -Force
-    Write-Host "Xbox One graphics: opengl32.dll proxy"
-} else {
-    $partialXboxOneRuntime = @($XboxOneGraphicsRuntimeDir, $env:XBOX_ONE_GRAPHICS_RUNTIME_DIR, (Get-ConfigPath "XboxOneGraphicsRuntimeDir")) |
-        Where-Object { $_ -and (Test-Path $_) } |
-        Select-Object -First 1
-    if ($partialXboxOneRuntime) {
-        Write-Warning "Xbox One graphics runtime found at '$partialXboxOneRuntime', but it is missing opengl32.dll, libEGL.dll, or libGLESv2.dll. Package will keep the Series/Mesa runtime only until a MobileGlues opengl32.dll is added."
-    } else {
-        Write-Warning "Xbox One graphics runtime not found. Set -XboxOneGraphicsRuntimeDir or XBOX_ONE_GRAPHICS_RUNTIME_DIR after building/adding MobileGlues opengl32.dll."
     }
 }
 
