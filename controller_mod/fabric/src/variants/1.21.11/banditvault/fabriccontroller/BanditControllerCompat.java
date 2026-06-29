@@ -18,6 +18,7 @@ import net.minecraft.class_2561;
 import net.minecraft.class_437;
 import net.minecraft.class_4185;
 import net.minecraft.class_746;
+import net.minecraft.class_9919;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWGamepadState;
 
@@ -743,10 +744,44 @@ public final class BanditControllerCompat {
             buttons[i] = GLFW_STATE.buttons(i) == GLFW.GLFW_PRESS;
         }
         CONTROLLER_STATE.capture(axes, buttons);
+
+        boolean activity = false;
+        for (int i = 0; i < buttons.length; i++) {
+            if (buttons[i]) {
+                activity = true;
+                break;
+            }
+        }
+        if (!activity) {
+            for (int i = 0; i < 4; i++) {
+                if (Math.abs(axes[i]) > 0.2f) {
+                    activity = true;
+                    break;
+                }
+            }
+        }
+        if (!activity && (axes[4] > 0.0f || axes[5] > 0.0f)) {
+            activity = true;
+        }
+        if (activity) {
+            resetInactivityTimer(class_310.method_1551());
+        }
     }
 
     private static void finishFrame() {
         CONTROLLER_STATE.finishFrame(BanditControllerSettings.get().triggerDeadzone);
+    }
+
+    private static void resetInactivityTimer(class_310 client) {
+        if (client == null) {
+            return;
+        }
+        // controller input goes through KeyMapping.setDown, never MC's kbd/mouse handlers, so the 1.21.2 afk fps limiter never sees us
+        // class_9919 = framerate limit tracker, method_61964() its getter, method_61939() stamps last-input time to now
+        class_9919 tracker = client.method_61964();
+        if (tracker != null) {
+            tracker.method_61939();
+        }
     }
 
     private static ControllerAxis axisFor(int index) {

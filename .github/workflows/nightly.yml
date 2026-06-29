@@ -13,7 +13,6 @@ on:
       - "scripts/**"
       - "log_configs/**"
       - "mesa-runtime/**"
-      - "xboxone-runtime/**"
       - "build.ps1"
       - "xbox_security.properties"
   workflow_dispatch:

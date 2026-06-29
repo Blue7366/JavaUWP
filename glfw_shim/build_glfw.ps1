@@ -32,9 +32,9 @@ $env:LIB = "$($tools.MsvcRoot)\lib\x64;" +
 
 Push-Location $PSScriptRoot
 Write-Host "Building glfw.dll (CoreWindow shim)..."
-& $tools.ClExe glfw_uwp.cpp /LD /EHsc /O2 /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /Fo"$objPath" `
+& $tools.ClExe glfw_uwp.cpp /LD /EHsc /O2 /GL /Gw /arch:AVX2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /Fo"$objPath" `
     /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
-    /link /DEF:glfw_uwp.def /OUT:"$dllPath" /IMPLIB:"$libPath" /MACHINE:X64 `
+    /link /LTCG /DEF:glfw_uwp.def /OUT:"$dllPath" /IMPLIB:"$libPath" /MACHINE:X64 `
     kernel32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib gameinput.lib ws2_32.lib
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw "glfw_uwp build FAILED" }
 Pop-Location

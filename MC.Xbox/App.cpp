@@ -334,9 +334,6 @@ public:
         SetEnvironmentVariableW(L"MC_LOG_DIR", g_logDir.c_str());
         const std::wstring graphicsRuntime = DetectGraphicsRuntimeName();
         SetEnvironmentVariableW(L"MC_GRAPHICS_RUNTIME", graphicsRuntime.c_str());
-        const std::wstring mobileGluesDir = exeDir + L"\\mobileglues";
-        EnsureDirectoryTree(mobileGluesDir);
-        SetEnvironmentVariableW(L"MG_DIR_PATH", mobileGluesDir.c_str());
 
         wchar_t lp[MAX_PATH];
         swprintf_s(lp, L"%s\\mc_launch.log", g_logDir.c_str());
@@ -347,7 +344,6 @@ public:
 
         WriteLog(L"=== MC.App Run() started ===");
         WriteLogF(L"graphicsRuntime=%s", graphicsRuntime.c_str());
-        WriteLogF(L"MG_DIR_PATH=%s", mobileGluesDir.c_str());
         WriteLogF(L"SetWindow called=%d", g_setWindowCalled ? 1 : 0);
         WriteLogF(L"SetWindow QueryInterface hr=0x%08X", g_windowInteropHr);
         WriteLogF(L"SetWindow get_WindowHandle hr=0x%08X", g_getWindowHandleHr);
@@ -623,9 +619,9 @@ public:
         };
         AuthScreenRenderer launchRendererInstance;
         AuthScreenRenderer* launchRenderer = nullptr;
-        if (launchRendererInstance.Initialize(g_authWindow.Get())) {
-            launchRenderer = &launchRendererInstance;
-        }
+        // mesa d3d12 needs exclusive CoreWindow swapchain ownership; holding a
+        // launch-screen D3D11 swapchain during the run trips wglCreateContext err=183
+        (void)launchRendererInstance;
         AuthUiState launchState;
         DeleteFileW((g_logDir + L"\\glfw_uwp.log").c_str());
 

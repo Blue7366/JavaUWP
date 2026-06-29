@@ -55,7 +55,7 @@ public:
         };
         D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
         HRESULT hr = E_FAIL;
-        const bool preferWarp = IsXboxOneGraphicsRuntime();
+        const bool preferWarp = false;
         const D3D_DRIVER_TYPE driverOrder[] = {
             preferWarp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE,
             preferWarp ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP
@@ -875,12 +875,6 @@ private:
         case D3D_DRIVER_TYPE_REFERENCE: return L"reference";
         default: return L"unknown";
         }
-    }
-
-    static bool IsXboxOneGraphicsRuntime() {
-        wchar_t value[32] = {};
-        const DWORD len = GetEnvironmentVariableW(L"MC_GRAPHICS_RUNTIME", value, ARRAYSIZE(value));
-        return len > 0 && len < ARRAYSIZE(value) && _wcsicmp(value, L"xboxone") == 0;
     }
 
     static float ReadDisplayScale() {

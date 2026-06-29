@@ -249,15 +249,10 @@ function Resolve-WindowsSdk {
 
 function Get-MesaRuntimeDllNames {
     return @(
-        "libEGL.dll",
-        "libGLESv2.dll",
-        "libGLESv1_CM.dll",
         "opengl32.dll",
         "libgallium_wgl.dll",
-        "libglapi.dll",
         "spirv_to_dxil.dll",
         "vulkan_dzn.dll",
-        "glu32.dll",
         "dxil.dll",
         "z-1.dll"
     )
@@ -273,7 +268,7 @@ function Test-MesaRuntimeDir {
         return $false
     }
 
-    $required = @("libEGL.dll", "opengl32.dll", "libgallium_wgl.dll")
+    $required = @("opengl32.dll", "libgallium_wgl.dll", "dxil.dll", "spirv_to_dxil.dll", "z-1.dll")
     foreach ($dll in $required) {
         if (-not (Test-Path (Join-Path $Path $dll))) {
             return $false
@@ -281,63 +276,6 @@ function Test-MesaRuntimeDir {
     }
 
     return $true
-}
-
-function Get-XboxOneGraphicsRuntimeDllNames {
-    return @(
-        "opengl32.dll",
-        "libEGL.dll",
-        "libGLESv2.dll",
-        "libGLESv1_CM.dll",
-        "glu32.dll"
-    )
-}
-
-function Test-XboxOneGraphicsRuntimeDir {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    if (-not (Test-Path $Path)) {
-        return $false
-    }
-
-    $required = @("opengl32.dll", "libEGL.dll", "libGLESv2.dll")
-    foreach ($dll in $required) {
-        if (-not (Test-Path (Join-Path $Path $dll))) {
-            return $false
-        }
-    }
-
-    return $true
-}
-
-function Resolve-XboxOneGraphicsRuntimeDir {
-    param(
-        [string]$XboxOneGraphicsRuntimeDir
-    )
-
-    $candidates = @()
-    if ($XboxOneGraphicsRuntimeDir) {
-        $candidates += $XboxOneGraphicsRuntimeDir
-    }
-    if ($env:XBOX_ONE_GRAPHICS_RUNTIME_DIR) {
-        $candidates += $env:XBOX_ONE_GRAPHICS_RUNTIME_DIR
-    }
-
-    $repoRuntimeDir = Get-ConfigPath "XboxOneGraphicsRuntimeDir"
-    if (Test-Path $repoRuntimeDir) {
-        $candidates += $repoRuntimeDir
-    }
-
-    foreach ($candidate in $candidates | Where-Object { $_ } | Select-Object -Unique) {
-        if (Test-XboxOneGraphicsRuntimeDir -Path $candidate) {
-            return (Resolve-Path $candidate).Path
-        }
-    }
-
-    return $null
 }
 
 function Resolve-MesaRuntimeDir {

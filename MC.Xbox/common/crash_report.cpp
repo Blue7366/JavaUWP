@@ -311,7 +311,6 @@ bool CreateCrashReportZip(const std::wstring& runtimeRoot, const std::wstring& r
     AddCrashZipFileEntry(entries, currentLogs + L"\\java_output.log", "logs/current/java_output.log");
     AddCrashZipFileEntry(entries, currentLogs + L"\\stderr_stream.log", "logs/current/stderr_stream.log");
     AddCrashZipFileEntry(entries, currentLogs + L"\\glfw_uwp.log", "logs/current/glfw_uwp.log");
-    AddCrashZipFileEntry(entries, currentLogs + L"\\xboxone_gl_proxy.log", "logs/current/xboxone_gl_proxy.log");
     AddCrashZipFileEntry(entries, currentLogs + L"\\java_args.txt", "logs/current/java_args.txt");
     AddCrashZipFileEntry(entries, currentLogs + L"\\java_classpath_final.txt", "logs/current/java_classpath_final.txt");
     AddCrashZipFileEntry(entries, reportGameDir + L"\\logs\\latest.log", "profile/game/logs/latest.log");

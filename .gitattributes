@@ -7,3 +7,4 @@
 *.h text eol=lf
 *.json text eol=lf
 *.xml text eol=lf
+*.patch binary

@@ -1,7 +1,6 @@
 # build.ps1 - Build and package MC Java UWP
 param(
     [string]$MesaRuntimeDir = $env:MESA_UWP_DIR,
-    [string]$XboxOneGraphicsRuntimeDir = $env:XBOX_ONE_GRAPHICS_RUNTIME_DIR,
     [string]$McVersion,
     [string]$FabricLoader,
     [string]$AssetIndex,
@@ -36,10 +35,8 @@ $nativesSourceDir = Get-ConfigPath "NativesDir"
 $certDir = Get-ConfigPath "CertificateDir"
 $mcBuildDir = Join-Path $buildDir "MC.Xbox"
 $glfwBuildDir = Join-Path $buildDir "glfw_shim"
-$xboxOneGlProxyBuildDir = Join-Path $buildDir "xboxone_gl_proxy"
 $mcExe = Join-Path $mcBuildDir "MC.Xbox.exe"
 $shimDll = Join-Path $glfwBuildDir "glfw.dll"
-$xboxOneGlProxyDll = Join-Path $xboxOneGlProxyBuildDir "opengl32.dll"
 $jreSrc = Resolve-JavaHome
 $jre21Src = Resolve-JavaHomeExact -MajorVersion 21
 $jarExe = Join-Path $jreSrc "bin\jar.exe"
@@ -319,9 +316,9 @@ Push-Location (Join-Path $root "MC.Xbox")
 $env:INCLUDE = "$mcBuildDir;$($tools.MsvcRoot)\include;${sdkRoot}Include\$sdkVer\ucrt;${sdkRoot}Include\$sdkVer\shared;${sdkRoot}Include\$sdkVer\um;${sdkRoot}Include\$sdkVer\winrt;${sdkRoot}Include\$sdkVer\cppwinrt;$jreSrc\include;$jreSrc\include\win32"
 $env:LIB = "$($tools.MsvcRoot)\lib\x64;${sdkRoot}Lib\$sdkVer\ucrt\x64;${sdkRoot}Lib\$sdkVer\um\x64"
 
-& $tools.ClExe App.cpp launch\app_globals.cpp common\launcher_common.cpp common\crash_report.cpp mods\mod_defaults.cpp mods\modpack_io.cpp mods\world_io.cpp net\http_client.cpp profiles\profiles.cpp net\remote_file_server.cpp auth\minecraft_auth.cpp ui\launcher_ui.cpp ui\mods_ui_globals.cpp mods\mods_browser.cpp launch\runtime_manager.cpp launch\minecraft_launch.cpp launch\launch_internal.cpp launch\loaders\loader_common.cpp launch\loaders\loader.cpp launch\loaders\fabric.cpp launch\loaders\neoforge.cpp launch\loaders\forge.cpp third_party\miniz\miniz.c /std:c++17 /EHsc /W3 /O2 /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /DMINIZ_NO_STDIO /DMINIZ_NO_TIME /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Fo"$mcBuildDir\" `
+& $tools.ClExe App.cpp launch\app_globals.cpp common\launcher_common.cpp common\crash_report.cpp mods\mod_defaults.cpp mods\modpack_io.cpp mods\world_io.cpp net\http_client.cpp profiles\profiles.cpp net\remote_file_server.cpp auth\minecraft_auth.cpp ui\launcher_ui.cpp ui\mods_ui_globals.cpp mods\mods_browser.cpp launch\runtime_manager.cpp launch\minecraft_launch.cpp launch\launch_internal.cpp launch\loaders\loader_common.cpp launch\loaders\loader.cpp launch\loaders\fabric.cpp launch\loaders\neoforge.cpp launch\loaders\forge.cpp third_party\miniz\miniz.c /std:c++17 /EHsc /W3 /O2 /GL /Gw /MP /arch:AVX2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /DMINIZ_NO_STDIO /DMINIZ_NO_TIME /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Fo"$mcBuildDir\" `
     /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
-    /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MACHINE:X64 `
+    /link /LTCG /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MACHINE:X64 `
     /OUT:"$mcExe" kernel32.lib shell32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib d2d1.lib dwrite.lib d3d11.lib dxgi.lib windowscodecs.lib winhttp.lib bcrypt.lib ws2_32.lib
 if ($LASTEXITCODE -ne 0) { throw "Compile failed" }
 Pop-Location
@@ -330,10 +327,6 @@ Write-Host "MC.Xbox.exe built"
 Write-Host "=== Building GLFW CoreWindow shim ==="
 & (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
-
-Write-Host "=== Building Xbox One OpenGL proxy ==="
-& (Join-Path $root "xboxone_gl_proxy\build_proxy.ps1") -OutputDir $xboxOneGlProxyBuildDir
-if (-not (Test-Path $xboxOneGlProxyDll)) { throw "Xbox One OpenGL proxy DLL missing after build: $xboxOneGlProxyDll" }
 
 Write-Host "=== Building Xbox compatibility mod ==="
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
@@ -352,7 +345,6 @@ Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "Assets") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "natives") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "graphics\mesa") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $pkg "graphics\xboxone") | Out-Null
 # runtime/ holds only launcher-owned or intentionally patched runtime pieces.
 # Mojang/Fabric game files are downloaded into LocalState after auth.
 New-Item -ItemType Directory -Force -Path (Join-Path $pkg "runtime") | Out-Null
@@ -579,40 +571,6 @@ foreach ($dll in Get-MesaRuntimeDllNames) {
         Copy-Item $source (Join-Path $pkg "natives\$dll") -Force
         Copy-Item $source (Join-Path $pkg "graphics\mesa\$dll") -Force
         Write-Host "Mesa: $dll"
-    }
-}
-
-Write-Host "Copying Xbox One graphics runtime..."
-$xboxOneRuntime = Resolve-XboxOneGraphicsRuntimeDir -XboxOneGraphicsRuntimeDir $XboxOneGraphicsRuntimeDir
-if ($xboxOneRuntime) {
-    Write-Host "Xbox One graphics runtime source: $xboxOneRuntime"
-    foreach ($dll in Get-XboxOneGraphicsRuntimeDllNames) {
-        if ($dll -eq "opengl32.dll") { continue }
-        $source = Join-Path $xboxOneRuntime $dll
-        if (Test-Path $source) {
-            Copy-Item $source (Join-Path $pkg "graphics\xboxone\$dll") -Force
-            Write-Host "Xbox One graphics: $dll"
-        }
-    }
-    $mobileGluesSource = Join-Path $xboxOneRuntime "mobileglues.dll"
-    if (-not (Test-Path $mobileGluesSource)) {
-        $mobileGluesSource = Join-Path $xboxOneRuntime "opengl32.dll"
-    }
-    if (-not (Test-Path $mobileGluesSource)) {
-        throw "Xbox One MobileGlues binary missing. Expected mobileglues.dll or opengl32.dll in $xboxOneRuntime"
-    }
-    Copy-Item $mobileGluesSource (Join-Path $pkg "graphics\xboxone\mobileglues.dll") -Force
-    Write-Host "Xbox One graphics: mobileglues.dll"
-    Copy-Item $xboxOneGlProxyDll (Join-Path $pkg "graphics\xboxone\opengl32.dll") -Force
-    Write-Host "Xbox One graphics: opengl32.dll proxy"
-} else {
-    $partialXboxOneRuntime = @($XboxOneGraphicsRuntimeDir, $env:XBOX_ONE_GRAPHICS_RUNTIME_DIR, (Get-ConfigPath "XboxOneGraphicsRuntimeDir")) |
-        Where-Object { $_ -and (Test-Path $_) } |
-        Select-Object -First 1
-    if ($partialXboxOneRuntime) {
-        Write-Warning "Xbox One graphics runtime found at '$partialXboxOneRuntime', but it is missing opengl32.dll, libEGL.dll, or libGLESv2.dll. Package will keep the Series/Mesa runtime only until a MobileGlues opengl32.dll is added."
-    } else {
-        Write-Warning "Xbox One graphics runtime not found. Set -XboxOneGraphicsRuntimeDir or XBOX_ONE_GRAPHICS_RUNTIME_DIR after building/adding MobileGlues opengl32.dll."
     }
 }
 
