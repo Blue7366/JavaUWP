@@ -3816,6 +3816,7 @@ extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
     }
 }
 extern "C" __declspec(dllexport) void glfwSwapInterval(int i) {
+    if (wglb::Active()) { wglb::SetSwapInterval(i); return; }
     if (p_eglSwapInterval && g_eglDisplay != EGL_NO_DISPLAY) {
         p_eglSwapInterval(g_eglDisplay, i);
     }

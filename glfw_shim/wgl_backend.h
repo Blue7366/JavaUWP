@@ -19,6 +19,7 @@ typedef int   (WINAPI* PFN_wglChoosePixelFormat)(HDC, const PIXELFORMATDESCRIPTO
 typedef HDC   (WINAPI* PFN_uwpGetDC)(HWND);
 typedef BOOL  (WINAPI* PFN_uwpSetPixelFormat)(HDC, int, const PIXELFORMATDESCRIPTOR*);
 typedef HGLRC (WINAPI* PFN_wglCreateContextAttribsARB)(HDC, HGLRC, const int*);
+typedef BOOL  (WINAPI* PFN_wglSwapIntervalEXT)(int);
 
 static HMODULE s_gl = nullptr;
 static HMODULE s_gallium = nullptr;
@@ -36,6 +37,7 @@ static PFN_wglChoosePixelFormat p_choosepf = nullptr;
 static PFN_uwpGetDC p_getdc = nullptr;
 static PFN_uwpSetPixelFormat p_setpf = nullptr;
 static PFN_wglCreateContextAttribsARB p_attribs = nullptr;
+static PFN_wglSwapIntervalEXT p_swapinterval = nullptr;
 
 static void Log(const char* fmt, ...) {
     if (!s_log) return;
@@ -111,6 +113,8 @@ static bool CreateContext(HWND coreWindow) {
     } else {
         Log("wgl wglCreateContextAttribsARB unavailable; keeping base context");
     }
+    p_swapinterval = (PFN_wglSwapIntervalEXT)p_getproc("wglSwapIntervalEXT");
+    Log("wgl wglSwapIntervalEXT => %p", (void*)p_swapinterval);
     s_active = true;
     return true;
 }
@@ -120,6 +124,13 @@ static bool MakeCurrent(bool bind) {
     return bind ? (p_makecur(s_dc, s_ctx) != 0) : (p_makecur(nullptr, nullptr) != 0);
 }
 static void Swap() { if (p_swap && s_dc) p_swap(s_dc); }
+static bool SetSwapInterval(int interval) {
+    if (!p_swapinterval && p_getproc) p_swapinterval = (PFN_wglSwapIntervalEXT)p_getproc("wglSwapIntervalEXT");
+    if (!p_swapinterval) { Log("wgl wglSwapIntervalEXT unavailable"); return false; }
+    BOOL r = p_swapinterval(interval);
+    Log("wgl swap interval set to %d (%s)", interval, r ? "ok" : "fail");
+    return r != 0;
+}
 static void* GetProc(const char* name) {
     void* p = nullptr;
     if (p_getproc) p = (void*)p_getproc(name);
