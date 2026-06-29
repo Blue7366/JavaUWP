@@ -7,6 +7,7 @@
   xmlns:build="http://schemas.microsoft.com/developer/appx/2015/build">
 
   <Identity Name="33847Adventureshigaming.Minecraftaddon" Publisher="CN=868817EC-C08B-4E9C-9AEC-2516E9B861C0" Version="1.0.0.0" ProcessorArchitecture="x64"/>
+  
   <mp:PhoneIdentity PhoneProductId="a1b2c3d4-0000-0000-0000-000000000002" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
@@ -17,6 +18,7 @@
 
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.15063.0" MaxVersionTested="10.0.26100.0"/>
+    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.15063.0" MaxVersionTested="10.0.26100.0"/>
     <PackageDependency Name="Microsoft.VCLibs.140.00" MinVersion="14.0.0.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"/>
   </Dependencies>
 
