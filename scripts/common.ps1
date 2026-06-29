@@ -249,15 +249,10 @@ function Resolve-WindowsSdk {
 
 function Get-MesaRuntimeDllNames {
     return @(
-        "libEGL.dll",
-        "libGLESv2.dll",
-        "libGLESv1_CM.dll",
         "opengl32.dll",
         "libgallium_wgl.dll",
-        "libglapi.dll",
         "spirv_to_dxil.dll",
         "vulkan_dzn.dll",
-        "glu32.dll",
         "dxil.dll",
         "z-1.dll"
     )
@@ -273,7 +268,7 @@ function Test-MesaRuntimeDir {
         return $false
     }
 
-    $required = @("libEGL.dll", "opengl32.dll", "libgallium_wgl.dll")
+    $required = @("opengl32.dll", "libgallium_wgl.dll", "dxil.dll", "spirv_to_dxil.dll", "z-1.dll")
     foreach ($dll in $required) {
         if (-not (Test-Path (Join-Path $Path $dll))) {
             return $false

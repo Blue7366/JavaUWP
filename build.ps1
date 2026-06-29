@@ -1105,9 +1105,10 @@ $allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
         $_.HasPrivateKey -and
         ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
     }
-$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' } | Sort-Object NotBefore -Descending
+$exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
+$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
 $otherSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -notlike '*BanditVault*' } | Sort-Object NotBefore -Descending
-$signingCertCandidates = @($banditVaultSigningCertCandidates) + @($otherSigningCertCandidates)
+$signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates) + @($otherSigningCertCandidates)
 if (-not $signingCertCandidates) {
     throw "Signing certificate not found in the current user certificate store."
 }

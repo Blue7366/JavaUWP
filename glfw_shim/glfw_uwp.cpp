@@ -1529,6 +1529,8 @@ static bool BuildNativeWindowPropertySet() {
     return true;
 }
 
+#include "wgl_backend.h"
+
 // ---------------------------------------------------------------------------
 // Graphics runtime loader
 // ---------------------------------------------------------------------------
@@ -1623,131 +1625,28 @@ static bool LoadMesaEGL() {
     return true;
 }
 
+static void WglLogLine(const char* s) { ShimLog("%s", s); }
+
+static HMODULE WglLoadDll(const wchar_t* name) {
+    wchar_t runtimeDir[MAX_PATH];
+    wchar_t packagePrefix[MAX_PATH];
+    SelectGraphicsRuntimeDir(runtimeDir, MAX_PATH, packagePrefix, MAX_PATH);
+    wchar_t absolutePath[MAX_PATH];
+    wchar_t packagedPath[MAX_PATH];
+    RuntimeDllPath(runtimeDir, packagePrefix, name, absolutePath, MAX_PATH, packagedPath, MAX_PATH);
+    char label[128];
+    size_t conv = 0;
+    wcstombs_s(&conv, label, sizeof(label), name, _TRUNCATE);
+    return LoadPackagedOrFile(packagedPath, absolutePath, label);
+}
+
 static bool CreateEglContext() {
-    if (g_eglContext != EGL_NO_CONTEXT) return true;
-    if (!LoadMesaEGL() || !AcquireCoreWindow()) return false;
-
-    g_eglDisplay = p_eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (g_eglDisplay == EGL_NO_DISPLAY && p_eglGetPlatformDisplay) {
-        g_eglDisplay = p_eglGetPlatformDisplay(0, EGL_DEFAULT_DISPLAY, nullptr);
-    }
-    if (g_eglDisplay == EGL_NO_DISPLAY) {
-        ReportEglError("eglGetDisplay");
-        return false;
-    }
-
-    EGLint major = 0;
-    EGLint minor = 0;
-    if (!p_eglInitialize(g_eglDisplay, &major, &minor)) {
-        ReportEglError("eglInitialize");
-        return false;
-    }
-
-    const EGLenum eglApi = g_graphicsRuntimeUsesGles ? EGL_OPENGL_ES_API : EGL_OPENGL_API;
-    if (!p_eglBindAPI(eglApi)) {
-        ReportEglError(g_graphicsRuntimeUsesGles ? "eglBindAPI(EGL_OPENGL_ES_API)" : "eglBindAPI(EGL_OPENGL_API)");
-        return false;
-    }
-
-    const EGLint renderableType = g_graphicsRuntimeUsesGles ? EGL_OPENGL_ES3_BIT_KHR : EGL_OPENGL_BIT;
-    const EGLint configAttrs[] = {
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 8,
-        EGL_DEPTH_SIZE, 24,
-        EGL_STENCIL_SIZE, 8,
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-        EGL_RENDERABLE_TYPE, renderableType,
-        EGL_NONE
-    };
-
-    EGLint numConfigs = 0;
-    if (!p_eglChooseConfig(g_eglDisplay, configAttrs, &g_eglConfig, 1, &numConfigs) || numConfigs < 1) {
-        ReportEglError("eglChooseConfig");
-        return false;
-    }
-
-    // The raw CoreWindow path is the stable Mesa UWP path. The PropertySet path
-    // can report success but present a black surface on Xbox.
-    g_eglSurface = p_eglCreateWindowSurface(g_eglDisplay, g_eglConfig,
-        reinterpret_cast<EGLNativeWindowType>(g_coreWindow.Get()), nullptr);
-    if (g_eglSurface != EGL_NO_SURFACE) {
-        ShimLog("eglCreateWindowSurface(CoreWindow) succeeded");
-    } else {
-        ReportEglError("eglCreateWindowSurface(CoreWindow)");
-    }
-
-    if (g_eglSurface == EGL_NO_SURFACE && p_eglCreatePlatformWindowSurface) {
-        g_eglSurface = p_eglCreatePlatformWindowSurface(g_eglDisplay, g_eglConfig,
-            g_coreWindow.Get(), nullptr);
-        if (g_eglSurface != EGL_NO_SURFACE) {
-            ShimLog("eglCreatePlatformWindowSurface(CoreWindow) succeeded");
-        } else {
-            ReportEglError("eglCreatePlatformWindowSurface(CoreWindow)");
-        }
-    }
-
-    if (g_eglSurface == EGL_NO_SURFACE) {
-        if (!BuildNativeWindowPropertySet()) return false;
-
-        g_eglSurface = p_eglCreateWindowSurface(g_eglDisplay, g_eglConfig,
-            reinterpret_cast<EGLNativeWindowType>(g_nativeWindowPropertySet.Get()), nullptr);
-        if (g_eglSurface != EGL_NO_SURFACE) {
-            ShimLog("eglCreateWindowSurface(PropertySet) succeeded");
-        } else {
-            ReportEglError("eglCreateWindowSurface(PropertySet)");
-        }
-    }
-
-    if (g_eglSurface == EGL_NO_SURFACE && g_nativeWindowPropertySet && p_eglCreatePlatformWindowSurface) {
-        g_eglSurface = p_eglCreatePlatformWindowSurface(g_eglDisplay, g_eglConfig,
-            g_nativeWindowPropertySet.Get(), nullptr);
-        if (g_eglSurface != EGL_NO_SURFACE) {
-            ShimLog("eglCreatePlatformWindowSurface(PropertySet) succeeded");
-        } else {
-            ReportEglError("eglCreatePlatformWindowSurface(PropertySet)");
-        }
-    }
-
-    if (g_eglSurface == EGL_NO_SURFACE) {
-        return false;
-    }
-
-    const bool legacyOpenGlContext = EnvFlagEnabled(L"MC_LEGACY_OPENGL_CONTEXT");
-    const EGLint desktopContextAttrs[] = {
-        EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
-        EGL_CONTEXT_MINOR_VERSION_KHR, 2,
-        EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
-        EGL_NONE
-    };
-    const EGLint legacyDesktopContextAttrs[] = {
-        EGL_CONTEXT_MAJOR_VERSION_KHR, 3,
-        EGL_CONTEXT_MINOR_VERSION_KHR, 2,
-        EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR, EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT_KHR,
-        EGL_NONE
-    };
-    const EGLint glesContextAttrs[] = {
-        EGL_CONTEXT_CLIENT_VERSION, 3,
-        EGL_NONE
-    };
-    const EGLint* contextAttrs = g_graphicsRuntimeUsesGles ? glesContextAttrs : (legacyOpenGlContext ? legacyDesktopContextAttrs : desktopContextAttrs);
-    ShimLog("OpenGL context request: %s", g_graphicsRuntimeUsesGles ? "GLES3" : (legacyOpenGlContext ? "3.2 compatibility" : "3.2 core"));
-    g_eglContext = p_eglCreateContext(g_eglDisplay, g_eglConfig, EGL_NO_CONTEXT, contextAttrs);
-    if (g_eglContext == EGL_NO_CONTEXT) {
-        ReportEglError(g_graphicsRuntimeUsesGles ? "eglCreateContext(GLES3)" : (legacyOpenGlContext ? "eglCreateContext(3.2 compatibility)" : "eglCreateContext(3.2 core)"));
-        g_eglContext = p_eglCreateContext(g_eglDisplay, g_eglConfig, EGL_NO_CONTEXT, nullptr);
-    }
-    if (g_eglContext == EGL_NO_CONTEXT) {
-        ReportEglError("eglCreateContext(fallback)");
-        return false;
-    }
-
-    const char* vendor = p_eglQueryString ? p_eglQueryString(g_eglDisplay, EGL_VENDOR) : nullptr;
-    const char* version = p_eglQueryString ? p_eglQueryString(g_eglDisplay, EGL_VERSION) : nullptr;
-    ShimLog("EGL initialized %d.%d vendor=%s version=%s context=%p unbound creatorTid=%lu",
-        major, minor, vendor ? vendor : "?", version ? version : "?",
-        g_eglContext, GetCurrentThreadId());
+    if (wglb::Active()) return true;
+    if (!AcquireCoreWindow()) return false;
+    if (!wglb::Load(WglLoadDll, WglLogLine)) return false;
+    if (!wglb::CreateContext(reinterpret_cast<HWND>(g_coreWindow.Get()))) return false;
+    g_opengl32 = wglb::OpenGL32();
+    ShimLog("WGL backend ready (mesa 26.1.3 d3d12), creatorTid=%lu", GetCurrentThreadId());
     return true;
 }
 
@@ -3557,7 +3456,9 @@ extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
                 (unsigned)g_eglContextThreadId, (unsigned)tid);
             return;
         }
-        if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
+        if (wglb::Active()) {
+            wglb::MakeCurrent(false);
+        } else if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
             p_eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
         g_eglContextThreadId = 0;
@@ -3567,16 +3468,20 @@ extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
     if (g_eglContextThreadId != 0 && g_eglContextThreadId != tid) {
         ShimLog("eglMakeCurrent moving context from tid=%lu to tid=%lu", g_eglContextThreadId, tid);
     }
-    if (!p_eglMakeCurrent(g_eglDisplay, g_eglSurface, g_eglSurface, g_eglContext)) {
-        ReportEglError("eglMakeCurrent");
+    const bool madeCurrent = wglb::Active()
+        ? wglb::MakeCurrent(true)
+        : (p_eglMakeCurrent(g_eglDisplay, g_eglSurface, g_eglSurface, g_eglContext) != 0);
+    if (!madeCurrent) {
+        if (wglb::Active()) ShimLog("wglMakeCurrent failed");
+        else ReportEglError("eglMakeCurrent");
         return;
     }
     g_eglContextThreadId = tid;
-    ShimLog("eglMakeCurrent OK tid=%lu", tid);
+    ShimLog("makeContextCurrent OK tid=%lu", tid);
 }
 extern "C" __declspec(dllexport) GLFWwindow* glfwGetCurrentContext(void) {
     const DWORD tid = GetCurrentThreadId();
-    GLFWwindow* current = (g_eglContext != EGL_NO_CONTEXT && g_eglContextThreadId == tid) ? (GLFWwindow*)&g_fake_window : NULL;
+    GLFWwindow* current = ((g_eglContext != EGL_NO_CONTEXT || wglb::Active()) && g_eglContextThreadId == tid) ? (GLFWwindow*)&g_fake_window : NULL;
     if (g_current_context_log_count < 16) {
         ++g_current_context_log_count;
         ShimLog("glfwGetCurrentContext #%d tid=%lu boundTid=%lu => %p",
@@ -3695,7 +3600,8 @@ static GLint g_locColor = -1;
 
 static void* Resolve(const char* name) {
     void* p = nullptr;
-    if (p_eglGetProcAddress) p = p_eglGetProcAddress(name);
+    if (wglb::Active()) p = wglb::GetProc(name);
+    if (!p && p_eglGetProcAddress) p = p_eglGetProcAddress(name);
     if (!p && g_graphicsRuntimeUsesGles && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     if (!p && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
     if (!p && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
@@ -3906,12 +3812,16 @@ extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
         ++g_swap_log_count;
         ShimLog("glfwSwapBuffers #%d", g_swap_log_count);
     }
-    if (!p_eglSwapBuffers || g_eglDisplay == EGL_NO_DISPLAY || g_eglSurface == EGL_NO_SURFACE) return;
     if (MouseCompanionActive() &&
         g_cursorMode == GLFW_CURSOR_NORMAL &&
         CurrentCursorInputOwner() == CursorInputOwnerRelay) {
         bandit_cursor::Draw();
     }
+    if (wglb::Active()) {
+        wglb::Swap();
+        return;
+    }
+    if (!p_eglSwapBuffers || g_eglDisplay == EGL_NO_DISPLAY || g_eglSurface == EGL_NO_SURFACE) return;
     if (!p_eglSwapBuffers(g_eglDisplay, g_eglSurface)) {
         ReportEglError("eglSwapBuffers");
     }
@@ -3931,7 +3841,8 @@ extern "C" __declspec(dllexport) int glfwExtensionSupported(const char* name) {
 }
 extern "C" __declspec(dllexport) void* glfwGetProcAddress(const char* name) {
     void* p = NULL;
-    if (g_graphicsRuntimeUsesGles && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
+    if (wglb::Active()) p = wglb::GetProc(name);
+    if (!p && g_graphicsRuntimeUsesGles && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
     if (!p && g_graphicsRuntimeUsesGles && g_libGLESv2) p = (void*)GetProcAddress(g_libGLESv2, name);
     if (!p && p_eglGetProcAddress) p = p_eglGetProcAddress(name);
     if (!p && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);

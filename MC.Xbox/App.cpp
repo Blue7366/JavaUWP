@@ -623,9 +623,9 @@ public:
         };
         AuthScreenRenderer launchRendererInstance;
         AuthScreenRenderer* launchRenderer = nullptr;
-        if (launchRendererInstance.Initialize(g_authWindow.Get())) {
-            launchRenderer = &launchRendererInstance;
-        }
+        // mesa d3d12 needs exclusive CoreWindow swapchain ownership; holding a
+        // launch-screen D3D11 swapchain during the run trips wglCreateContext err=183
+        (void)launchRendererInstance;
         AuthUiState launchState;
         DeleteFileW((g_logDir + L"\\glfw_uwp.log").c_str());
 
