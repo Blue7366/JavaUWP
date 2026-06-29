@@ -16,6 +16,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Push command-line overrides into the environment before sourcing config.
+# scripts/config.ps1 honors these so every downstream script (compat mod,
+# patch-fabric, etc.) sees the same chosen version.
 if ($McVersion)    { $env:MC_VERSION = $McVersion }
 if ($FabricLoader) { $env:FABRIC_LOADER_VERSION = $FabricLoader }
 if ($AssetIndex)   { $env:MC_ASSET_INDEX = $AssetIndex }
@@ -49,8 +52,11 @@ $sdkVer = $sdk.Version
 
 function Assert-AppxVersion {
     param([Parameter(Mandatory = $true)][string]$Version)
+
     $parts = $Version -split '\.'
-    if ($parts.Count -ne 4) { throw "APPX version must have four numeric fields: $Version" }
+    if ($parts.Count -ne 4) {
+        throw "APPX version must have four numeric fields: $Version"
+    }
     foreach ($part in $parts) {
         $value = 0
         if (-not [int]::TryParse($part, [ref]$value) -or $value -lt 0 -or $value -gt 65535) {
@@ -62,9 +68,13 @@ function Assert-AppxVersion {
 $manifestSourcePath = Join-Path $root "MC.Xbox\Package.appxmanifest"
 [xml]$sourceManifest = Get-Content $manifestSourcePath
 $baseVersionParts = ([string]$sourceManifest.Package.Identity.Version) -split '\.'
-if ($baseVersionParts.Count -ne 4) { throw "Package.appxmanifest Identity Version must have four numeric fields." }
+if ($baseVersionParts.Count -ne 4) {
+    throw "Package.appxmanifest Identity Version must have four numeric fields."
+}
 $appVersionBase = "$($baseVersionParts[0]).$($baseVersionParts[1]).$($baseVersionParts[2])"
 
+# Auto-increment local builds from the package manifest base version so installs
+# update in place while CI can provide an exact APPX_VERSION for nightlies.
 $verFile = Join-Path $root ".local\app_build.txt"
 if ($AppxVersion) {
     Assert-AppxVersion $AppxVersion
