@@ -1180,6 +1180,41 @@ if (-not $KeepStaging) {
     Write-Host "Removed staging package directory"
 }
 
+Write-Host "=== Packaging ==="
+
+# Local signing has been removed to prevent SignTool errors. 
+# The Microsoft Partner Center will automatically re-sign this package 
+# with a valid Store certificate upon ingestion.
+Write-Host "Skipping local signing for Store ingestion."
+
+if (-not $SkipStopAppProcesses) {
+    $lockPaths = if ($StopFileLockers) { @($appx) } else { @() }
+    Stop-BuildBlockingProcesses `
+        -PackageName $sourceManifest.Package.Identity.Name `
+        -RootPath $root `
+        -PackageContentPath $pkg `
+        -OutputPath $appx `
+        -LockPaths $lockPaths
+}
+
+$makeappx = Get-ChildItem "${sdkRoot}bin\$sdkVer\x64\makeappx.exe","${sdkRoot}bin\10.0.26100.0\x64\makeappx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+if (-not $makeappx) {
+    $cmd = Get-Command makeappx -ErrorAction SilentlyContinue
+    if ($cmd) { $makeappx = $cmd.Source }
+}
+if (-not $makeappx) { throw "makeappx.exe not found. Add Windows SDK bin to PATH." }
+
+# Pack the package without signing
+& $makeappx pack /d $pkg /p $appx /overwrite
+if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed" }
+
+if (-not (Test-Path $appx)) { throw "Appx package was not created" }
+
+if (-not $KeepStaging) {
+    Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
+    Write-Host "Removed staging package directory"
+}
+
 Write-Host ""
-Write-Host "=== Done ==="
+Write-Host "=== Done (Unsigned for Store) ==="
 Write-Host "Package: $appx"
